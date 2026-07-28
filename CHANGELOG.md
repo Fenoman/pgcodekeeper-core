@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Fixed a parsing error for the `ALTER SEQUENCE ... SET LOGGED/UNLOGGED` command for regular sequences in PostgreSQL.
 - Fixed an error in the order of PostgreSQL `ALTER TABLE ... OWNER TO` and `ALTER SEQUENCE ... OWNER TO` commands by moving the latter to the end of the migration script.
 
+### Security
+
+- Increased version of lz4-java library due to CVE-2026-59949.
+
 ## [15.0.0] - 2026-07-14
 
 ### Added
