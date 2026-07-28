@@ -120,6 +120,13 @@
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- override version with CVE-2026-59949 -->
+        <dependency>
+            <groupId>at.yawk.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.11.1</version>
+        </dependency>
     </dependencies>
 
     <build>
