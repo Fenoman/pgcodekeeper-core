@@ -33,6 +33,7 @@ import org.pgcodekeeper.core.database.api.schema.ISimpleOptionContainer;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.api.schema.ObjectReference;
 import org.pgcodekeeper.core.database.api.schema.ObjectState;
+import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.script.SQLScript;
@@ -195,21 +196,28 @@ public class PgColumn extends PgAbstractStatement
     }
 
     private void appendCompressOptions(StringBuilder sb) {
-        if (compressType != null || compressLevel != -1 || blockSize != 0) {
-            sb.append(" ENCODING (");
-            if (compressType != null) {
-                sb.append("COMPRESSTYPE = ").append(compressType);
-            }
-
-            if (compressLevel != -1) {
-                sb.append(", COMPRESSLEVEL = ").append(compressLevel);
-            }
-
-            if (blockSize != 0) {
-                sb.append(", BLOCKSIZE = ").append(blockSize);
-            }
-            sb.append(")");
+        if (!hasCompressOptions()) {
+            return;
         }
+
+        sb.append(" ENCODING (");
+        if (compressType != null) {
+            sb.append("COMPRESSTYPE = ").append(compressType).append(", ");
+        }
+
+        if (compressLevel != -1) {
+            sb.append("COMPRESSLEVEL = ").append(compressLevel).append(", ");
+        }
+
+        if (blockSize != 0) {
+            sb.append("BLOCKSIZE = ").append(blockSize).append(", ");
+        }
+        sb.setLength(sb.length() - 2);
+        sb.append(")");
+    }
+
+    private boolean hasCompressOptions() {
+        return compressType != null || compressLevel != -1 || blockSize != 0;
     }
 
     private String getAlterTableColumn(boolean only, String column) {
@@ -267,8 +275,20 @@ public class PgColumn extends PgAbstractStatement
         int startSize = script.getSize();
         PgColumn newColumn = (PgColumn) newCondition;
 
-        if (isGeneratedColumnChanged(newColumn) || !compareCompressOptions(newColumn)) {
+        if (isGeneratedColumnChanged(newColumn)) {
             return ObjectState.RECREATE;
+        }
+
+        if (!compareCompressOptions(newColumn)) {
+            if (checkSyntaxVersion(script.getSettings(), PgSupportedVersion.GP_VERSION_7)
+                    && newColumn.hasCompressOptions()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append(getAlterTableColumn(false, name)).append(" SET");
+                newColumn.appendCompressOptions(sb);
+                script.addStatement(sb);
+            } else {
+                return ObjectState.RECREATE;
+            }
         }
 
         boolean isNeedDropDefault = !Objects.equals(type, newColumn.type)

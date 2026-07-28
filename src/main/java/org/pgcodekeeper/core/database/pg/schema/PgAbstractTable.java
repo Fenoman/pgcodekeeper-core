@@ -18,6 +18,7 @@ package org.pgcodekeeper.core.database.pg.schema;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
 import org.pgcodekeeper.core.database.base.schema.StatementUtils;
+import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.script.SQLActionType;
@@ -57,6 +58,14 @@ public abstract class PgAbstractTable extends PgAbstractStatementContainer imple
             "compresstype",
             "compresslevel",
             "analyze_hll_non_part_table");
+
+    /**
+     * List of Greenplum-specific storage options that can be changed by ALTER TABLE since Greenplum 7.
+     */
+    protected static final Set<String> GP_COMPRESS_OPTION_LIST = Set.of(
+            "blocksize",
+            "compresstype",
+            "compresslevel");
 
     private static final String RESTART_SEQUENCE_QUERY = """
             DO LANGUAGE plpgsql $_$
@@ -178,7 +187,7 @@ public abstract class PgAbstractTable extends PgAbstractStatementContainer imple
             column.appendComments(script);
         }
     }
-    
+
     @Override
     public ObjectState appendAlterSQL(IStatement newCondition, SQLScript script) {
         int startSize = script.getSize();
@@ -203,7 +212,7 @@ public abstract class PgAbstractTable extends PgAbstractStatementContainer imple
 
     /**
      * Checks whether the table needs to be recreated due to changes in its options.
-     * 
+     *
      * @param newTable     the reference table to compare with
      * @param settings     configuration settings
      * @return {@code true} if recreation is required, {@code false} otherwise
@@ -213,8 +222,14 @@ public abstract class PgAbstractTable extends PgAbstractStatementContainer imple
             return false;
         }
 
+        var isGp7Syntax = checkSyntaxVersion(settings, PgSupportedVersion.GP_VERSION_7);
+
         // check greenplum options
         for (String gpOption : GP_OPTION_LIST) {
+            if (isGp7Syntax && GP_COMPRESS_OPTION_LIST.contains(gpOption)) {
+                continue;
+            }
+
             if (!Objects.equals(options.get(gpOption), newTable.getOption(gpOption))) {
                 return true;
             }

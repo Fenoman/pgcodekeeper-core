@@ -195,7 +195,8 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
         }
 
         var settings = script.getSettings();
-        if (checkSyntaxVersion(settings, PgSupportedVersion.GP_VERSION_7) && !Objects.equals(method, newRegTable.method)) {
+        if (checkSyntaxVersion(settings, PgSupportedVersion.GP_VERSION_7)
+                && !Objects.equals(method, newRegTable.method)) {
             script.addStatement(getAlterTable(false) + " SET ACCESS METHOD " + newRegTable.method);
         }
     }
@@ -243,8 +244,22 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
             return true;
         }
 
+        if (!Objects.equals(method, regTable.method) && isCompressOptionsChanged(regTable)) {
+            return true;
+        }
+
         return !compareMethod(regTable, settings)
                 || !Objects.equals(partitionBy, regTable.partitionBy);
+    }
+
+    private boolean isCompressOptionsChanged(PgAbstractRegularTable regTable) {
+        for (String gpOption : GP_COMPRESS_OPTION_LIST) {
+            if (!Objects.equals(options.get(gpOption), regTable.options.get(gpOption))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean compareMethod(PgAbstractRegularTable regTable, ISettings settings) {

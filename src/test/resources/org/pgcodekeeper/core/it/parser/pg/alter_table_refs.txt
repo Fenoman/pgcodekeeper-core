@@ -1683,3 +1683,7 @@ Reference: Object = test_gen_virtual (TABLE), action = ALTER, line number = 2678
 Reference: Object = test_gen_implicit (TABLE), action = ALTER, line number = 2679, charPositionInLine = 12
 Reference: Object = nv_parent (TABLE), action = ALTER, line number = 2681, charPositionInLine = 12
 Reference: Object = nv_parent (TABLE), action = ALTER, line number = 2682, charPositionInLine = 12
+Reference: Object = public (SCHEMA), action = null, line number = 2684, charPositionInLine = 12
+Reference: Object = public.t1 (TABLE), action = ALTER, line number = 2684, charPositionInLine = 19
+Reference: Object = public (SCHEMA), action = null, line number = 2685, charPositionInLine = 12
+Reference: Object = public.t1 (TABLE), action = ALTER, line number = 2685, charPositionInLine = 19
