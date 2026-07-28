@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+- Added support for changing table and column compression settings via `ALTER TABLE` commands instead of recreating objects when the Greenplum 7 syntax is enabled.
+
 ### Changed
 
 ### Fixed

@@ -2680,3 +2680,6 @@ ALTER TABLE test_gen_implicit ADD COLUMN a int GENERATED ALWAYS AS (5);
 
 alter table nv_parent add NOT NULL c1;
 alter table nv_parent add constraint test_not_null NOT NULL c1 NO INHERIT;
+
+ALTER TABLE public.t1 ALTER COLUMN col1 SET ENCODING (COMPRESSTYPE=zstd, COMPRESSLEVEL=4, BLOCKSIZE=65536);
+ALTER TABLE public.t1 ALTER COLUMN col2 SET ENCODING (compresstype=rle_type);

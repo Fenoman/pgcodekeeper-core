@@ -487,6 +487,7 @@ column_action
     | DROP EXPRESSION if_exists?
     | SET storage_parameters
     | SET compression_identifier
+    | SET encoding_identifier
     | set_statistics
     | SET STORAGE storage_option
     | RESET names_in_parens
