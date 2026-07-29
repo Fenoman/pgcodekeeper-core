@@ -89,7 +89,7 @@ public final class MetaStorage implements Serializable {
      * @param version the PostgreSQL version
      * @return list of system metadata objects
      */
-    static List<MetaStatement> getSystemObjects(ISupportedVersion version) {
+    public static List<MetaStatement> getSystemObjects(ISupportedVersion version) {
         MetaStorage storage = getObjectsFromResources(version);
         return storage != null ? storage.definitions : Collections.emptyList();
     }

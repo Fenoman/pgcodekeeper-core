@@ -37,51 +37,7 @@ import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Set_statemen
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.SqlContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.StatementContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.VexContext;
-import org.pgcodekeeper.core.database.pg.parser.statement.GpCreateExternalTable;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterDomain;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterFtsStatement;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterIndex;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterMatView;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterOther;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterOwner;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterSequence;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterTable;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgAlterView;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCommentOn;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateAggregate;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateCast;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateCollation;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateDatabase;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateDomain;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateEventTrigger;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateExtension;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFdw;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateForeignTable;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFtsConfiguration;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFtsDictionary;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFtsParser;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFtsTemplate;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateFunction;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateIndex;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateOperator;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreatePolicy;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateRule;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateSchema;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateSequence;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateServer;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateStatistics;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateTable;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateTrigger;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateType;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateUserMapping;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateView;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgDeleteStatement;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgDropStatement;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgGrantPrivilege;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgInsertStatement;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgMergeStatement;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgParserAbstract;
-import org.pgcodekeeper.core.database.pg.parser.statement.PgUpdateStatement;
+import org.pgcodekeeper.core.database.pg.parser.statement.*;
 import org.pgcodekeeper.core.database.pg.schema.PgDatabase;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts;
 import org.pgcodekeeper.core.exception.UnresolvedReferenceException;
@@ -127,7 +83,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
         for (StatementContext s : rootCtx.statement()) {
             statement(s, stream);
         }
-        if (ParserListenerMode.NORMAL == mode) {
+        if (needAnalyze()) {
             db.sortColumns();
         }
     }
@@ -329,8 +285,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
 
         switch (confParam.toLowerCase(Locale.ROOT)) {
             case "search_path":
-                if (ParserListenerMode.NORMAL == mode
-                        && (vex.size() != 1 || !PgConsts.PG_CATALOG.equals(confValue))) {
+                if (needAnalyze() && (vex.size() != 1 || !PgConsts.PG_CATALOG.equals(confValue))) {
                     throw new UnresolvedReferenceException(Messages.PgCustomParserListener_unsupported_search_path,
                             ctx.start);
                 }
@@ -418,5 +373,9 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
             return getActionDescription(ctx, descrWordsCount);
         }
         return ctx.getStart().getText().toUpperCase(Locale.ROOT);
+    }
+
+    private boolean needAnalyze() {
+        return ParserListenerMode.NORMAL == mode || ParserListenerMode.SINGLE == mode;
     }
 }

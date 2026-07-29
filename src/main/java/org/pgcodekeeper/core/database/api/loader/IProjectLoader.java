@@ -15,9 +15,23 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.api.loader;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Collection;
+
+import org.pgcodekeeper.core.database.api.schema.IDatabase;
+
 /**
  * Interface for project loader
  */
 public interface IProjectLoader extends ILoader {
 
+    /**
+     * Loads the given project files in isolation, without reading the whole
+     * project.
+     *
+     * @param files project files to parse
+     * @return database populated from the given files only
+     */
+    IDatabase loadFiles(Collection<Path> files) throws IOException, InterruptedException;
 }

@@ -18,6 +18,7 @@ package org.pgcodekeeper.core.database.pg.parser.statement;
 import java.util.List;
 
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
@@ -79,11 +80,11 @@ public final class PgAlterIndex extends PgParserAbstract {
             }
 
             PgIndex index = schema.getIndexByName(inhName.getText());
-            if (index == null) {
-                getSafe(PgSchema::getConstraintByName, schema, inhName);
-            } else {
+            if (index != null) {
                 doSafe((i, o) -> i.addInherit(inhSchemaName, inhTableName), index, null);
                 addDepSafe(index, ids, DbObjType.INDEX);
+            } else if (ParserListenerMode.SINGLE != getParserMode()) {
+                getSafe(PgSchema::getConstraintByName, schema, inhName);
             }
 
         } else {
