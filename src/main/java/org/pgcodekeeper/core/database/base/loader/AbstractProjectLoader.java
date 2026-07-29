@@ -17,6 +17,7 @@ package org.pgcodekeeper.core.database.base.loader;
 
 import org.pgcodekeeper.core.Consts;
 import org.pgcodekeeper.core.database.api.loader.IProjectLoader;
+import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.api.project.IWorkDirs;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.IPrivilege;
@@ -93,6 +94,48 @@ public abstract class AbstractProjectLoader<T extends IDatabase> extends Abstrac
             IMonitor.checkCancelled(getMonitor());
         }
         return db;
+    }
+
+    @Override
+    public T loadFiles(Collection<Path> files) throws InterruptedException, IOException {
+        T db = createDatabase();
+        Path overridesDir = dirPath.resolve(OVERRIDES_DIR);
+        List<Path> overrideFiles = new ArrayList<>();
+        for (Path file : files) {
+            IMonitor.checkCancelled(getMonitor());
+            if (file.startsWith(overridesDir)) {
+                if (!getSettings().isIgnorePrivileges()) {
+                    overrideFiles.add(file);
+                }
+                continue;
+            }
+            AbstractDumpLoader<T> loader = createDumpLoader(file);
+            loader.setWorkDirs(workDirs);
+            loader.setMode(ParserListenerMode.SINGLE);
+            loader.loadWithoutAnalyze(db, antlrTasks);
+            dumpLoaders.add(loader);
+        }
+        finishLoaders();
+        loadFileOverrides(overrideFiles, db);
+        return db;
+    }
+
+    private void loadFileOverrides(List<Path> overrideFiles, T db) throws InterruptedException, IOException {
+        if (overrideFiles.isEmpty()) {
+            return;
+        }
+
+        for (Path file : overrideFiles) {
+            IMonitor.checkCancelled(getMonitor());
+            AbstractDumpLoader<T> loader = createDumpLoader(file);
+            loader.setOverridesMap(overrides);
+            loader.setMode(ParserListenerMode.SINGLE);
+            loader.loadWithoutAnalyze(db, antlrTasks);
+            dumpLoaders.add(loader);
+        }
+        finishLoaders();
+        IMonitor.checkCancelled(getMonitor());
+        replaceOverrides();
     }
 
     public void setLib(boolean isLib) {

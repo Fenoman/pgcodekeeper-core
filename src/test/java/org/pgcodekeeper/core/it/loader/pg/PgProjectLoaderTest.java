@@ -26,7 +26,10 @@ import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.api.schema.ObjectReference;
 import org.pgcodekeeper.core.database.base.loader.AbstractProjectLoader;
+import org.pgcodekeeper.core.database.base.parser.AntlrError;
+import org.pgcodekeeper.core.database.base.parser.ErrorTypes;
 import org.pgcodekeeper.core.database.base.project.AbstractWorkDirs;
+import org.pgcodekeeper.core.database.base.schema.meta.MetaUtils;
 import org.pgcodekeeper.core.database.pg.PgDatabaseProvider;
 import org.pgcodekeeper.core.database.pg.project.PgModelExporter;
 import org.pgcodekeeper.core.ignorelist.IgnoreList;
@@ -325,6 +328,82 @@ class PgProjectLoaderTest {
         db = dumpLoader.loadAndAnalyze();
         assertTrue(dumpLoader.getErrors().isEmpty(), dumpLoader.getErrors().toString());
         assertNull(db.getStatement(ref));
+    }
+
+    @Test
+    void testSingleFileLoaderSkipsCrossFileIndexAttach(@TempDir Path dir) throws IOException, InterruptedException {
+        Path projectDir = dir.resolve("project");
+        createProject(projectDir, new CoreSettings());
+
+        Path file = projectDir.resolve("SCHEMA/public/TABLE/attach.sql");
+        Files.writeString(file, "ALTER INDEX public.main_idx ATTACH PARTITION public.child_idx;");
+
+        var dumpLoader = databaseProvider.getDumpLoader(file, new CoreSettings());
+        dumpLoader.setMode(ParserListenerMode.SINGLE);
+        dumpLoader.load();
+        assertTrue(dumpLoader.getErrors().isEmpty(), dumpLoader.getErrors().toString());
+    }
+
+    @Test
+    void testLoadFilesBatch(@TempDir Path dir) throws IOException, InterruptedException {
+        Path projectDir = dir.resolve("project");
+        createProject(projectDir, new CoreSettings());
+
+        Path viewFile = projectDir.resolve("SCHEMA/country/VIEW/city_view.sql");
+        Files.createDirectories(viewFile.getParent());
+        Files.writeString(viewFile, "CREATE VIEW country.city_view AS SELECT * FROM country.city;");
+
+        var loader = databaseProvider.getProjectLoader(projectDir, new CoreSettings());
+        IDatabase db = loader.loadFiles(List.of(
+                projectDir.resolve("SCHEMA/public/TABLE/emp.sql"),
+                viewFile));
+
+        assertNotNull(db.getStatement(new ObjectReference("public", "emp", DbObjType.TABLE)));
+        assertNotNull(db.getStatement(new ObjectReference("country", "city_view", DbObjType.VIEW)));
+        assertTrue(loader.getErrors().isEmpty(), loader.getErrors().toString());
+        var definitions = MetaUtils.getObjDefinitions(db);
+        assertFalse(definitions.isEmpty());
+        assertNotNull(definitions.get(viewFile.toString()));
+    }
+
+    @Test
+    void testLoadFilesAppliesOverrides(@TempDir Path dir) throws IOException, InterruptedException {
+        Path projectDir = dir.resolve("project");
+        createProject(projectDir, new CoreSettings());
+        Path overrideDir = projectDir.resolve("OVERRIDES/SCHEMA/public/TABLE");
+        Files.createDirectories(overrideDir);
+        Path overrideFile = overrideDir.resolve("emp.sql");
+        Files.copy(TestUtils.getFilePath(RESOURCE_OVERRIDE_EMP, getClass()), overrideFile);
+
+        var loader = databaseProvider.getProjectLoader(projectDir, new CoreSettings());
+        IDatabase db = loader.loadFiles(List.of(projectDir.resolve("SCHEMA/public/TABLE/emp.sql"), overrideFile));
+        assertTrue(loader.getErrors().isEmpty(), loader.getErrors().toString());
+
+        var emp = db.getStatement(new ObjectReference("public", "emp", DbObjType.TABLE));
+        assertNotNull(emp);
+        Assertions.assertEquals("override_user", emp.getOwner());
+        assertTrue(emp.getPrivileges().stream().anyMatch(
+                p -> !p.isRevoke() && "SELECT".equals(p.getPermission()) && "override_user".equals(p.getRole())));
+
+        // an override file without the referenced object reports an error instead of being skipped
+        var isolatedLoader = databaseProvider.getProjectLoader(projectDir, new CoreSettings());
+        isolatedLoader.loadFiles(List.of(overrideFile));
+        assertFalse(isolatedLoader.getErrors().isEmpty());
+    }
+
+    @Test
+    void testSingleFileLoaderReportsMisplacedObjects(@TempDir Path dir) throws IOException, InterruptedException {
+        Path projectDir = dir.resolve("project");
+        createProject(projectDir, new CoreSettings());
+
+        Path tableFile = projectDir.resolve("SCHEMA/country/TABLE/city.sql");
+        Path misplacedFile = projectDir.resolve("SCHEMA/country/TABLE/misplaced.sql");
+        Files.copy(tableFile, misplacedFile);
+
+        var loader = databaseProvider.getProjectLoader(projectDir, new CoreSettings());
+        loader.loadFiles(List.of(misplacedFile));
+        assertTrue(loader.getErrors().stream().anyMatch(e -> e instanceof AntlrError err
+                && ErrorTypes.MISPLACEERROR == err.getErrorType()), loader.getErrors().toString());
     }
 
     private void assertNotLoaded(IDatabase db, String tableName) {
