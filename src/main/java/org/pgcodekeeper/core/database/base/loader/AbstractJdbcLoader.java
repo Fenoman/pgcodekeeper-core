@@ -79,7 +79,9 @@ public abstract class AbstractJdbcLoader<T extends IDatabase> extends AbstractLo
                 throw new MonitorCancelledRuntimeException();
             }
             setCurrentObject(object);
-            finalizer.accept(r);
+            if (list.isEmpty()) {
+                finalizer.accept(r);
+            }
         });
     }
 

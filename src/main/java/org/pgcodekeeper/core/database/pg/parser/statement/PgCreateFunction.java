@@ -278,7 +278,10 @@ public final class PgCreateFunction extends PgParserAbstract {
             AntlrTaskManager.submit(antlrTasks,
                     () -> PgParserUtils.createSqlParser(def, name, err, start).sql(),
                     funcCtx -> {
-                        errors.addAll(err);
+                        if (!err.isEmpty()) {
+                            errors.addAll(err);
+                            return;
+                        }
                         PgFuncProcAnalysisLauncher launcher = new PgFuncProcAnalysisLauncher(
                                 function, funcCtx, fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
                         launcher.setOffset(start);
@@ -292,7 +295,10 @@ public final class PgCreateFunction extends PgParserAbstract {
                         return parser.plpgsql_function();
                     },
                     funcCtx -> {
-                        errors.addAll(err);
+                        if (!err.isEmpty()) {
+                            errors.addAll(err);
+                            return;
+                        }
                         PgFuncProcAnalysisLauncher launcher = new PgFuncProcAnalysisLauncher(
                                 function, funcCtx, fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
                         launcher.setOffset(start);

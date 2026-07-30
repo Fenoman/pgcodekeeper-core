@@ -1,0 +1,2 @@
+TYPE public."treat"
+	PROCEDURE public.with_quoted_token(integer, integer)
