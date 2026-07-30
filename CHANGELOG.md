@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [15.1.0] - 2026-07-30
+
+### Added
+
 - Added support for changing table and column compression settings via `ALTER TABLE` commands instead of recreating objects when the Greenplum 7 syntax is enabled.
 
 ### Changed
@@ -2552,7 +2560,8 @@ We increment major version in this release due to decision to shift our developm
 
 - ORDER BY parsing has been added to the aggregate functions.
 
-[Unreleased]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.0.0...HEAD
+[Unreleased]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.1.0...HEAD
+[15.1.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.0.0...v15.1.0
 [15.0.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.7.0...v15.0.0
 [14.7.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.6.0...v14.7.0
 [14.6.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.5.0...v14.6.0
