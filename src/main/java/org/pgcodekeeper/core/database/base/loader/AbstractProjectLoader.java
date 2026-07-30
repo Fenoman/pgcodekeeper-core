@@ -129,7 +129,7 @@ public abstract class AbstractProjectLoader<T extends IDatabase> extends Abstrac
             IMonitor.checkCancelled(getMonitor());
             AbstractDumpLoader<T> loader = createDumpLoader(file);
             loader.setOverridesMap(overrides);
-            loader.setMode(ParserListenerMode.SINGLE);
+            loader.setMode(ParserListenerMode.REF);
             loader.loadWithoutAnalyze(db, antlrTasks);
             dumpLoaders.add(loader);
         }

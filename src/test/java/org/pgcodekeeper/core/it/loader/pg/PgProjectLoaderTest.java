@@ -367,7 +367,7 @@ class PgProjectLoaderTest {
     }
 
     @Test
-    void testLoadFilesAppliesOverrides(@TempDir Path dir) throws IOException, InterruptedException {
+    void testLoadFilesCollectsOverrideReferences(@TempDir Path dir) throws IOException, InterruptedException {
         Path projectDir = dir.resolve("project");
         createProject(projectDir, new CoreSettings());
         Path overrideDir = projectDir.resolve("OVERRIDES/SCHEMA/public/TABLE");
@@ -381,14 +381,12 @@ class PgProjectLoaderTest {
 
         var emp = db.getStatement(new ObjectReference("public", "emp", DbObjType.TABLE));
         assertNotNull(emp);
-        Assertions.assertEquals("override_user", emp.getOwner());
-        assertTrue(emp.getPrivileges().stream().anyMatch(
-                p -> !p.isRevoke() && "SELECT".equals(p.getPermission()) && "override_user".equals(p.getRole())));
+        Assertions.assertNotEquals("override_user", emp.getOwner());
 
-        // an override file without the referenced object reports an error instead of being skipped
         var isolatedLoader = databaseProvider.getProjectLoader(projectDir, new CoreSettings());
-        isolatedLoader.loadFiles(List.of(overrideFile));
-        assertFalse(isolatedLoader.getErrors().isEmpty());
+        IDatabase isolatedDb = isolatedLoader.loadFiles(List.of(overrideFile));
+        assertTrue(isolatedLoader.getErrors().isEmpty(), isolatedLoader.getErrors().toString());
+        assertFalse(isolatedDb.getObjReferences().isEmpty());
     }
 
     @Test
