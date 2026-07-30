@@ -39,7 +39,7 @@ class PgDepcyFinderTest {
             "view, public.v1",
             }, useHeadersInDisplayName = true)
     void compareReverseGraph(String fileName, String objectName) throws IOException, InterruptedException {
-        compareGraph(fileName, FILES_POSTFIX.DEPS_REVERSE_TXT, objectName, true);
+        compareGraph(fileName, FILES_POSTFIX.DEPS_REVERSE_TXT, objectName, true, false);
     }
 
     @ParameterizedTest
@@ -64,11 +64,21 @@ class PgDepcyFinderTest {
             "table_constraint, public.test_fk_1.fk",
             }, useHeadersInDisplayName = true)
     void compareBothGraph(String fileName, String objectName) throws IOException, InterruptedException {
-        compareGraph(fileName, FILES_POSTFIX.DEPS_TXT, objectName, false);
-        compareGraph(fileName, FILES_POSTFIX.DEPS_REVERSE_TXT, objectName, true);
+        compareGraph(fileName, FILES_POSTFIX.DEPS_TXT, objectName, false, false);
+        compareGraph(fileName, FILES_POSTFIX.DEPS_REVERSE_TXT, objectName, true, false);
     }
 
-    void compareGraph(String fileName, FILES_POSTFIX expectedPostfix, String objectName, boolean isReverse)
+    @ParameterizedTest
+    @CsvSource(value = {
+        "fileName, objectName",
+        "procedure_with_reserved_token, public.\"treat\""
+        }, useHeadersInDisplayName = true)
+    void compareBothGraphWithErrors(String fileName, String objectName) throws IOException, InterruptedException {
+        compareGraph(fileName, FILES_POSTFIX.DEPS_TXT, objectName, false, true);
+        compareGraph(fileName, FILES_POSTFIX.DEPS_REVERSE_TXT, objectName, true, true);
+    }
+
+    void compareGraph(String fileName, FILES_POSTFIX expectedPostfix, String objectName, boolean isReverse, boolean hasErrors)
             throws IOException, InterruptedException {
         var settings = new CoreSettings();
         PgDatabaseProvider databaseProvider = new PgDatabaseProvider();
@@ -76,7 +86,7 @@ class PgDepcyFinderTest {
         settings.setEnableFunctionBodiesDependencies(true);
 
         IDatabase db = IntegrationTestUtils.loadTestDump(databaseProvider, fileName + FILES_POSTFIX.SQL,
-                getClass(), settings);
+                getClass(), settings, true, hasErrors);
 
         var deps = DepcyFinder.byPatterns(10, isReverse, Collections.emptyList(), false, db, List.of(objectName));
         String actual = String.join("\n", deps);

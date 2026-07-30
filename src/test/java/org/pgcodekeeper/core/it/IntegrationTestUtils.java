@@ -58,6 +58,13 @@ public final class IntegrationTestUtils {
     public static IDatabase loadTestDump(IDatabaseProvider databaseProvider, String resource, Class<?> c,
                                          ISettings settings, boolean analysis)
             throws IOException, InterruptedException {
+                return loadTestDump(databaseProvider, resource, c, settings, analysis, false);
+    }
+
+
+    public static IDatabase loadTestDump(IDatabaseProvider databaseProvider, String resource, Class<?> c,
+                                         ISettings settings, boolean analysis, boolean hasErrors)
+            throws IOException, InterruptedException {
         InputStreamProvider input = () -> c.getResourceAsStream(resource);
         String inputObjectName = "test/" + c.getName() + '/' + resource;
 
@@ -68,7 +75,11 @@ public final class IntegrationTestUtils {
             FullAnalyze.fullAnalyze(db, settings.getErrors(), settings.getVersion());
         }
 
-        TestUtils.assertErrors(settings.getErrors());
+        if (hasErrors) {
+            Assertions.assertFalse(settings.getErrors().isEmpty());
+        } else {
+            TestUtils.assertErrors(settings.getErrors());
+        }
         return db;
     }
 

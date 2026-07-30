@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 
+- Disabled dependency analysis for objects that could not be parsed correctly, reducing the number of irrelevant errors displayed to the user.
+
 ### Fixed
 
 - Fixed a parsing error for the `ALTER SEQUENCE ... SET LOGGED/UNLOGGED` command for regular sequences in PostgreSQL.
