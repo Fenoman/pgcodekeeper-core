@@ -128,6 +128,9 @@ public final class PgOverridesListener extends CustomParserListener<PgDatabase>
         }
 
         PgSchema st = (PgSchema) getSafe(IDatabase::getSchema, db, ctx.name);
+        if (st == null) {
+            return;
+        }
         if (PgConsts.DEFAULT_SCHEMA.equals(st.getName()) && "postgres".equals(owner.getText())) {
             return;
         }
@@ -148,14 +151,19 @@ public final class PgOverridesListener extends CustomParserListener<PgDatabase>
             IdentifierContext name;
             if (owner != null && (name = owner.user_name().identifier()) != null) {
                 IRelation st = getSafe(ISchema::getRelation, schema, nameCtx);
-                overrides.computeIfAbsent((AbstractStatement) st,
-                        k -> new StatementOverride()).setOwner(name.getText());
+                if (st != null) {
+                    overrides.computeIfAbsent((AbstractStatement) st,
+                            k -> new StatementOverride()).setOwner(name.getText());
+                }
             }
         }
     }
 
     private <T extends IStatement, R extends IStatement> R getSafe(
             BiFunction<T, String, R> getter, T container, ParserRuleContext ctx) {
+        if (ParserListenerMode.REF == mode) {
+            return null;
+        }
         String name = ctx.getText();
         R statement = getter.apply(container, name);
         if (statement == null) {
