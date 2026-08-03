@@ -398,7 +398,9 @@ public final class Utils {
             pair = new Pair<>(oldDb, newDb);
         }
 
-        resetLibraryPrivileges(pair.first, pair.second);
+        if (!settings.isIgnorePrivileges()) {
+            resetLibraryPrivileges(pair.first, pair.second);
+        }
         return pair;
     }
 
