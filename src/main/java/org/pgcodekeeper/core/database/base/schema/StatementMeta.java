@@ -25,6 +25,7 @@ public class StatementMeta {
     private ObjectLocation location;
     private String author;
     private String libName;
+    private boolean isIgnorePrivileges;
 
     public ObjectLocation getLocation() {
         return location;
@@ -59,6 +60,14 @@ public class StatementMeta {
         this.libName = libName;
     }
 
+    public void setIgnorePrivileges(boolean isIgnorePrivileges) {
+        this.isIgnorePrivileges = isIgnorePrivileges;
+    }
+
+    public boolean isIgnorePrivileges() {
+        return isIgnorePrivileges;
+    }
+
     /**
      * Copies metadata from another StatementMeta instance.
      *
@@ -68,5 +77,6 @@ public class StatementMeta {
         this.location = meta.location;
         this.author = meta.author;
         this.libName = meta.libName;
+        this.isIgnorePrivileges = meta.isIgnorePrivileges;
     }
 }

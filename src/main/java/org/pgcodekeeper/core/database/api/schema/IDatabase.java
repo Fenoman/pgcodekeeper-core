@@ -97,12 +97,14 @@ public interface IDatabase extends IStatementContainer {
      * @param lib     the library database to add
      * @param libName the name of the library
      * @param owner   the owner to set for owned objects
+     * @param isIgnorePrivileges flag if true ignore privileges
      */
-    default void addLib(IDatabase lib, String libName, String owner) {
+    default void addLib(IDatabase lib, String libName, String owner, boolean isIgnorePrivileges) {
         lib.getDescendants().forEach(st -> {
             // do not override dependent library name
             if (libName != null && st.getLibName() == null) {
                 st.setLibName(libName);
+                st.setIgnorePrivileges(isIgnorePrivileges);
             }
             if (st.isOwned() && owner != null && !owner.isEmpty()) {
                 st.setOwner(owner);

@@ -84,7 +84,7 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
             throws InterruptedException, IOException {
         for (String path : paths) {
             IMonitor.checkCancelled(getMonitor());
-            database.addLib(getLibraryDependency(path, isIgnorePrivileges), path, null);
+            database.addLib(getLibraryDependency(path, isIgnorePrivileges), path, null, isIgnorePrivileges);
         }
     }
 
@@ -110,7 +110,7 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
                 IMonitor.checkCancelled(getMonitor());
                 String path = lib.path();
                 T db = getLibraryDependency(path, lib.isIgnorePrivileges(), xmlPath);
-                database.addLib(db, path, lib.owner());
+                database.addLib(db, path, lib.owner(), lib.isIgnorePrivileges());
             }
         } finally {
             loadNested = oldLoadNested;
@@ -280,7 +280,7 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
             throws InterruptedException, IOException {
         String filePath = sub.toString();
         if (filePath.endsWith(".zip")) {
-            db.addLib(getLibraryDependency(filePath, settings.isIgnorePrivileges()), null, null);
+            db.addLib(getLibraryDependency(filePath, settings.isIgnorePrivileges()), null, null, settings.isIgnorePrivileges());
         } else if (filePath.endsWith(Consts.SQL_POSTFIX)) {
             var loader = getDumpLoader(sub, settings);
             loader.loadWithoutAnalyze(db, antlrTasks);

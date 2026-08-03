@@ -83,6 +83,14 @@ public final class IntegrationTestUtils {
         return db;
     }
 
+    public static void createProjectFromDump(IDatabaseProvider provider, Path projectDir, String resource,
+            Class<?> c) throws IOException, InterruptedException {
+        var settings = new CoreSettings();
+        settings.setKeepNewlines(true);
+        IDatabase d = loadTestDump(provider, resource, c, settings);
+        provider.getModelExporter(projectDir, d, List.of(), settings).exportFull();
+    }
+
     public static void assertDiffSame(IDatabaseProvider provider, IDatabase db, String template,
                                       ISettings settings)
             throws IOException, InterruptedException {

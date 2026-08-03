@@ -283,6 +283,16 @@ public class MetaStatement implements IStatement, Serializable {
         throw new UnsupportedOperationException();
     }
 
+    @Override 
+    public void setIgnorePrivileges(boolean isIgnorePrivileges) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isIgnorePrivileges() {
+        throw new UnsupportedOperationException();
+    }
+
     @Override
     public void setLocation(ObjectLocation loc) {
         throw new UnsupportedOperationException();

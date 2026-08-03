@@ -275,6 +275,16 @@ public abstract class AbstractStatement implements IStatement, IHashable {
         meta.setLibName(libName);
     }
 
+    @Override
+    public void setIgnorePrivileges(boolean isIgnorePrivileges) {
+        meta.setIgnorePrivileges(isIgnorePrivileges);
+    }
+
+    @Override
+    public boolean isIgnorePrivileges() {
+        return meta.isIgnorePrivileges();
+    }
+
     /**
      * Gets the author of this statement.
      *
