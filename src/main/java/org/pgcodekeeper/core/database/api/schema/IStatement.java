@@ -191,6 +191,20 @@ public interface IStatement {
     void setLibName(String libName);
 
     /**
+    * Sets the flag ignore privileges of the library this statement comes from
+    * 
+    * @param isIgnorePrivileges the library flag ignore privileges to set
+    */
+    void setIgnorePrivileges(boolean isIgnorePrivileges);
+    
+    /**
+    * Returns the flag ignore privileges of the library this statement comes from
+    * 
+    * @return the library flag ignore privileges
+    */
+    boolean isIgnorePrivileges();
+
+    /**
      * Fill script with object changes and return change type
      *
      * @param newCondition new object state

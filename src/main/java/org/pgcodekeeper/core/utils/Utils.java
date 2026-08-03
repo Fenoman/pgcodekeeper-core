@@ -50,6 +50,8 @@ import javax.xml.transform.stream.StreamResult;
 
 import org.pgcodekeeper.core.database.api.loader.ILoader;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
+import org.pgcodekeeper.core.database.api.schema.IStatement;
+import org.pgcodekeeper.core.database.api.schema.ObjectReference;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.monitor.IMonitor;
 import org.pgcodekeeper.core.settings.ISettings;
@@ -381,18 +383,23 @@ public final class Utils {
 
         oldDbLoader.preLoad();
         newDbLoader.preLoad();
+
+        Pair<IDatabase, IDatabase> pair;
         if (settings.isParallelLoad()) {
-            return loadDatabasesInParallelMode(oldDbLoader, newDbLoader, monitor);
+            pair = loadDatabasesInParallelMode(oldDbLoader, newDbLoader, monitor);
+        } else {
+            monitor.setTaskName(Messages.Utils_loading_old_database);
+            var oldDb = oldDbLoader.loadAndAnalyze();
+            monitor.worked(30);
+
+            monitor.setTaskName(Messages.Utils_loading_new_database);
+            var newDb = newDbLoader.loadAndAnalyze();
+            monitor.worked(30);
+            pair = new Pair<>(oldDb, newDb);
         }
-        monitor.setTaskName(Messages.Utils_loading_old_database);
-        var oldDb = oldDbLoader.loadAndAnalyze();
-        monitor.worked(30);
 
-        monitor.setTaskName(Messages.Utils_loading_new_database);
-        var newDb = newDbLoader.loadAndAnalyze();
-        monitor.worked(30);
-
-        return new Pair<>(oldDb, newDb);
+        resetLibraryPrivileges(pair.first, pair.second);
+        return pair;
     }
 
     /**
@@ -417,7 +424,9 @@ public final class Utils {
         try {
             CompletableFuture.allOf(oldDbFuture, newDbFuture).join();
             monitor.worked(60);
-            return new Pair<>(oldDbFuture.join(), newDbFuture.join());
+            var oldDb = oldDbFuture.join();
+            var newDb = newDbFuture.join();
+            return new Pair<>(oldDb, newDb);
         } catch (CompletionException e) {
             monitor.setCancelled(true);
             Throwable cause = e.getCause();
@@ -430,6 +439,26 @@ public final class Utils {
                 throw io;
             }
             throw new IOException(Messages.Utils_failed_to_load_databases, cause);
+        }
+    }
+
+    private static void resetLibraryPrivileges(IDatabase oldDb, IDatabase newDb) {
+        oldDb.getDescendants()
+            .filter(IStatement::isIgnorePrivileges)
+            .map(IStatement::toObjectReference)
+            .forEach(ref -> resetStatementPrivileges(ref, newDb));
+
+        newDb.getDescendants()
+            .filter(IStatement::isIgnorePrivileges)
+            .map(IStatement::toObjectReference)
+            .forEach(ref -> resetStatementPrivileges(ref, oldDb));
+    }
+
+    private static void resetStatementPrivileges(ObjectReference ref, IDatabase db) {
+        var st = db.getStatement(ref);
+        if (st != null) {
+            st.clearPrivileges();
+            st.setOwner(null);
         }
     }
 
