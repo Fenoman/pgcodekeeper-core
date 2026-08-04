@@ -19,6 +19,17 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: get jarsigner key
+        uses: 1arp/create-a-file-action@1cdd9b67e2fa15cff7431f5ba6863466a76a9a9e #v0.4.6
+        with:
+          path: /tmp/keystore
+          isAbsolutePath: false
+          file: key.txt
+          content: ${{ secrets.KEY_JKS_BASE_64 }}
+
+      - name: decode keystore
+        run: base64 --decode -i tmp/keystore/key.txt -o tmp/keystore/key.jks
+
       - name: Import GPG key
         env: 
           GPG_KEY_DATA: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -39,4 +50,4 @@ jobs:
           content: ${{ secrets.MAVEN_SETTINGS_XML }}
 
       - name: Build and deploy
-        run: mvn -B -ntp clean deploy -DskipTests -Prelease
+        run: mvn -B -ntp clean deploy -DskipTests -Prelease -Dkeystore=${{ github.workspace }}/tmp/keystore/key.jks
