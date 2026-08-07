@@ -1,0 +1,3 @@
+SHOW ALL
+HIDE NONE t_audit_insert type=TRIGGER,COLUMN
+HIDE NONE t_audit_insert type=TRIGGER

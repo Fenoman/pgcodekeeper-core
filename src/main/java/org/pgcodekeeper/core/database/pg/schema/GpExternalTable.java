@@ -137,15 +137,23 @@ public class GpExternalTable extends PgAbstractTable implements IForeignTable, P
         sbSQL.append("TABLE ").append(getQualifiedName());
     }
 
+    /**
+     * An external table writes a column as a name and a type and nothing else,
+     * so it builds its own body rather than going through
+     * {@link #writeColumns(StringBuilder, SQLScript)}. It reads the same list of
+     * columns, because the statements written after it are written from that
+     * same list.
+     */
     @Override
     protected void appendColumns(StringBuilder sbSQL, SQLScript script) {
+        List<PgColumn> written = columnsInCreateBody();
         sbSQL.append(" (");
-        for (PgColumn column : columns) {
+        for (PgColumn column : written) {
             sbSQL.append("\n\t").append(column.getName()).append(" ")
                     .append(column.getType()).append(",");
         }
 
-        if (!columns.isEmpty()) {
+        if (!written.isEmpty()) {
             sbSQL.setLength(sbSQL.length() - 1);
         }
         sbSQL.append("\n)");

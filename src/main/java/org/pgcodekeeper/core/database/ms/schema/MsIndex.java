@@ -16,6 +16,7 @@
 package org.pgcodekeeper.core.database.ms.schema;
 
 import java.util.*;
+import java.util.stream.Stream;
 
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.schema.*;
@@ -241,6 +242,33 @@ public class MsIndex extends MsAbstractStatement implements IIndex {
     public void addInclude(String include) {
         this.includes.add(include);
         resetHash();
+    }
+
+    /**
+     * The columns this index is built on, which it keeps as names of its own.
+     * <p>
+     * Dependencies answer this for every other statement of the dialect, and for
+     * the columns this index merely {@code INCLUDE}s. They do not answer it for
+     * the columns of the key: an index read out of a project file records no
+     * dependency on them, an index read out of a server does, and the two must
+     * give the same answer to whoever is about to leave a column out of the table
+     * this index stands on - see {@code ColumnVisibility}. So the question is
+     * asked here rather than answered out of {@link #getDependencies()} alone,
+     * and the dependency graph is left exactly as it was.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public Stream<ObjectReference> getReferencedColumns() {
+        IStatement table = getParent();
+        IStatement schema = table == null ? null : table.getParent();
+        if (columns.isEmpty() || schema == null) {
+            return super.getReferencedColumns();
+        }
+
+        return Stream.concat(super.getReferencedColumns(), columns.stream()
+                .map(column -> new ObjectReference(schema.getName(), table.getName(),
+                        column.getName(), DbObjType.COLUMN)));
     }
 
     public String getTablespace() {

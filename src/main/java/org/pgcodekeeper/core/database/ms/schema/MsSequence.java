@@ -26,6 +26,7 @@ import org.pgcodekeeper.core.database.api.schema.ObjectState;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -118,7 +119,7 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
         }
 
         StringBuilder sbSQL = new StringBuilder();
-        if (compareSequenceBody(newSequence, sbSQL)) {
+        if (compareSequenceBody(newSequence, sbSQL, script.getSettings())) {
             script.addStatement("ALTER SEQUENCE " + getQualifiedName() + sbSQL);
         }
 
@@ -127,7 +128,7 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
         return getObjectState(script, startSize);
     }
 
-    private boolean compareSequenceBody(MsSequence newSequence, StringBuilder sbSQL) {
+    private boolean compareSequenceBody(MsSequence newSequence, StringBuilder sbSQL, ISettings settings) {
         final String oldIncrement = increment;
         final String newIncrement = newSequence.increment;
 
@@ -167,17 +168,7 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
             sbSQL.append(newStart);
         }
 
-        final String oldCache = cache;
-        final String newCache = newSequence.cache;
-
-        if (newSequence.isCached && !Objects.equals(newCache, oldCache)) {
-            sbSQL.append("\n\tCACHE ");
-            if (newCache != null) {
-                sbSQL.append(newCache);
-            }
-        } else if (!newSequence.isCached) {
-            sbSQL.append("\n\tNO CACHE");
-        }
+        appendCache(newSequence, sbSQL, settings, cache);
 
         final boolean oldCycle = cycle;
         final boolean newCycle = newSequence.cycle;
@@ -189,6 +180,30 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
         }
 
         return !sbSQL.isEmpty();
+    }
+
+    /**
+     * Writes the cache clause of the target state, unless the settings keep the
+     * cache out of the migration.
+     * <p>
+     * Here the cache is the whole clause {@code CACHE [n] | NO CACHE} rather
+     * than a number: MS SQL states the absence of caching explicitly, and it is
+     * that statement as a whole the setting is about.
+     */
+    private static void appendCache(MsSequence newSequence, StringBuilder sbSQL, ISettings settings,
+                                    String oldCache) {
+        if (settings.isIgnoreSequenceCache()) {
+            return;
+        }
+
+        if (!newSequence.isCached) {
+            sbSQL.append("\n\tNO CACHE");
+        } else if (!Objects.equals(newSequence.cache, oldCache)) {
+            sbSQL.append("\n\tCACHE ");
+            if (newSequence.cache != null) {
+                sbSQL.append(newSequence.cache);
+            }
+        }
     }
 
     public void setDataType(String dataType) {
@@ -259,8 +274,25 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
 
     @Override
     public void computeHash(Hasher hasher) {
-        hasher.put(isCached);
-        hasher.put(cache);
+        computeHash(hasher, false);
+    }
+
+    @Override
+    public int hashIgnoringCache() {
+        return hashIgnoringChildren(hasher -> computeHash(hasher, true));
+    }
+
+    /**
+     * The one place the state of a sequence is hashed, so that the hash without
+     * the cache cannot drift away from the hash with it.
+     *
+     * @param ignoreCache leaves the whole cache clause out of the hash
+     */
+    private void computeHash(Hasher hasher, boolean ignoreCache) {
+        if (!ignoreCache) {
+            hasher.put(isCached);
+            hasher.put(cache);
+        }
         hasher.put(cycle);
         hasher.put(increment);
         hasher.put(maxValue);
@@ -271,19 +303,58 @@ public class MsSequence extends MsAbstractStatement implements ISequence {
 
     @Override
     public boolean compare(IStatement obj) {
+        return compare(obj, false);
+    }
+
+    @Override
+    public boolean compareIgnoringCache(ISequence target) {
+        return compare(target, true);
+    }
+
+    /**
+     * The one place the state of a sequence is compared, so that the comparison
+     * without the cache cannot drift away from the comparison with it.
+     *
+     * @param ignoreCache leaves the whole cache clause out of the comparison
+     */
+    private boolean compare(IStatement obj, boolean ignoreCache) {
         if (this == obj) {
             return true;
         }
         return obj instanceof MsSequence seq
                 && super.compare(obj)
-                && isCached == seq.isCached
-                && Objects.equals(cache, seq.cache)
+                && (ignoreCache || (isCached == seq.isCached && Objects.equals(cache, seq.cache)))
                 && cycle == seq.cycle
                 && Objects.equals(increment, seq.increment)
                 && Objects.equals(maxValue, seq.maxValue)
                 && Objects.equals(minValue, seq.minValue)
                 && Objects.equals(dataType, seq.dataType)
                 && Objects.equals(startWith, seq.startWith);
+    }
+
+    /**
+     * The cache is the project's while {@link ISettings#isIgnoreSequenceCache()}
+     * is on.
+     * <p>
+     * Here that is the clause as a whole - {@code CACHE [n] | NO CACHE} - and
+     * not a number, for the reason {@link #appendCache} states: MS SQL says the
+     * absence of caching out loud, and it is the statement as a whole the
+     * setting is about. Both halves of it are therefore carried over together,
+     * exactly the pair {@link #compareIgnoringCache} overlooks.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public IStatement adoptUnmanaged(IStatement projectSide, ISettings settings) {
+        if (!settings.isIgnoreSequenceCache() || !(projectSide instanceof MsSequence project)
+                || (isCached == project.isCached && Objects.equals(cache, project.cache))) {
+            return this;
+        }
+
+        MsSequence adopted = (MsSequence) deepCopy();
+        adopted.setCached(project.isCached);
+        adopted.setCache(project.cache);
+        return attachCopy(adopted);
     }
 
     @Override

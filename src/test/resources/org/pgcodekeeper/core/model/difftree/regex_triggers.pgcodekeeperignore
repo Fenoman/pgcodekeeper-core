@@ -1,0 +1,2 @@
+SHOW ALL
+HIDE REGEX "^t_audit_" type=TRIGGER

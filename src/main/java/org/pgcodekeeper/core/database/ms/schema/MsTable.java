@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.schema.*;
 import org.pgcodekeeper.core.hasher.Hasher;
+import org.pgcodekeeper.core.model.difftree.ColumnVisibility;
 import org.pgcodekeeper.core.script.*;
 import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
@@ -66,7 +67,7 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
     public void getCreationSQL(SQLScript script) {
         final StringBuilder sbSQL = new StringBuilder();
         appendName(sbSQL);
-        appendColumns(sbSQL);
+        appendColumns(sbSQL, script.getSettings());
         appendOptions(sbSQL);
         script.addStatement(sbSQL);
         appendAlterOptions(script);
@@ -82,10 +83,34 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
         sbSQL.append("CREATE TABLE ").append(getQualifiedName());
     }
 
-    private void appendColumns(StringBuilder sbSQL) {
-        sbSQL.append("(\n");
+    /**
+     * The columns the body of a {@code CREATE} of this table is written with, and
+     * therefore the columns every statement of that {@code CREATE} may name.
+     * <p>
+     * All of them. An ignore list is not asked here and is not asked anywhere
+     * else in the generator: hiding lives in the comparison, see
+     * {@link ColumnVisibility}. The one place the rules do decide which columns
+     * are written is a project file, see
+     * {@link StatementUtils#columnsForProjectFile(List, List, ColumnVisibility)},
+     * and that decision is taken before the statement reaches a generator.
+     * <p>
+     * Kept as a method of its own because what a column of this dialect carries
+     * beside its definition is written inside that definition, with one
+     * exception - a privilege granted on the column alone, which is a statement
+     * of its own that names it and fails outright against a table created without
+     * it. Both have to come from one and the same list, and this is that list.
+     *
+     * @return the columns of this table
+     */
+    private List<MsColumn> columnsInCreateBody() {
+        return columns;
+    }
 
-        for (MsColumn column : columns) {
+    private void appendColumns(StringBuilder sbSQL, ISettings settings) {
+        sbSQL.append("(\n");
+        int bodyStart = sbSQL.length();
+
+        for (MsColumn column : StatementUtils.orderColumnsForWriting(columnsInCreateBody(), settings)) {
             sbSQL.append("\t");
             sbSQL.append(column.getFullDefinition());
             sbSQL.append(",\n");
@@ -102,18 +127,34 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
                 sbSQL.append(",\n");
             }
         }
-        sbSQL.setLength(sbSQL.length() - 2);
-        appendPeriodSystem(sbSQL);
+
+        // the separator is taken off what was written rather than off what the
+        // table holds: a body that wrote nothing has no separator to take off,
+        // and taking one anyway ate the parenthesis it opened with
+        boolean written = sbSQL.length() > bodyStart;
+        if (written) {
+            sbSQL.setLength(sbSQL.length() - 2);
+        }
+        appendPeriodSystem(sbSQL, written);
         sbSQL.append('\n').append(')');
     }
 
-    private void appendPeriodSystem(StringBuilder sb) {
+    private void appendPeriodSystem(StringBuilder sb, boolean afterSomething) {
         if (periodStartCol != null && periodEndCol != null) {
-            sb.append(",\n\tPERIOD FOR SYSTEM_TIME (");
-            sb.append(periodStartCol.getQuotedName()).append(", ");
-            sb.append(periodEndCol.getQuotedName());
-            sb.append(")");
+            if (afterSomething) {
+                sb.append(',');
+            }
+            sb.append("\n\t").append(periodSystemClause());
         }
+    }
+
+    /**
+     * The {@code PERIOD FOR SYSTEM_TIME} of a system versioned table, as it is
+     * written inside the body of the {@code CREATE}.
+     */
+    private String periodSystemClause() {
+        return "PERIOD FOR SYSTEM_TIME (" + periodStartCol.getQuotedName()
+                + ", " + periodEndCol.getQuotedName() + ")";
     }
 
     private void appendOptions(StringBuilder sbSQL) {
@@ -163,7 +204,7 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
     }
 
     private void appendColumnsPriliges(SQLScript script) {
-        for (MsColumn col : columns) {
+        for (MsColumn col : columnsInCreateBody()) {
             col.appendPrivileges(script);
         }
     }
@@ -309,10 +350,19 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
         writeInsert(script, newTable, tblTmpQName, identityColsForMovingData, cols);
     }
 
+    /**
+     * The names of the columns whose data is moved into the recreated table,
+     * which are the columns that table was built with: a calculated column has
+     * nothing to move, and everything else does.
+     * <p>
+     * The recreated table is built with every column of the state it is built
+     * from, an ignore list notwithstanding, see {@link #columnsInCreateBody()}.
+     * Leaving a column out here would therefore not spare it - it would silently
+     * drop its data on a rebuild.
+     */
     private List<String> getColsForMovingData(MsTable newTbl) {
-        return newTbl.getColumns().stream()
+        return newTbl.columnsInCreateBody().stream()
                 .filter(c -> containsColumn(c.getName()))
-                .map(MsColumn.class::cast)
                 .filter(msCol -> msCol.getExpression() == null && msCol.getGenerated() == null)
                 .map(MsColumn::getName).toList();
     }
@@ -357,7 +407,95 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
 
     @Override
     public boolean compareIgnoringColumnOrder(ITable newTable) {
-        return compare(newTable, false);
+        return compare(newTable, false, ColumnVisibility.all());
+    }
+
+    /**
+     * The parts of the body of this table that name its columns as text.
+     * <p>
+     * Three of them, and every one is a part of the {@code CREATE TABLE} rather
+     * than a statement about a column, so a column any of them names cannot be
+     * left out: the body would state a column it does not declare.
+     * <ul>
+     * <li>A computed column keeps the expression it reads its siblings from as
+     * the text it was written as, and nothing resolves it to a reference.</li>
+     * <li>A {@code PERIOD FOR SYSTEM_TIME} names the two columns that bound the
+     * lifetime of a row.</li>
+     * <li>The primary key of a memory optimized table is written inside the body,
+     * and is held neither among the constraints of this table nor among its
+     * children - {@link #getConstraints()} does not report it and no dependency
+     * of anything records it - so nothing else can speak for its columns.</li>
+     * </ul>
+     */
+    @Override
+    public Collection<String> getClausesNamingColumns() {
+        List<String> clauses = new ArrayList<>();
+        for (MsColumn column : columns) {
+            String expression = column.getExpression();
+            if (expression != null) {
+                clauses.add(expression);
+            }
+        }
+
+        if (periodStartCol != null && periodEndCol != null) {
+            clauses.add(periodSystemClause());
+        }
+
+        for (MsConstraint pkey : getPkeys()) {
+            if (pkey.isPrimaryKey()) {
+                clauses.add(pkey.getDefinition());
+            }
+        }
+
+        return clauses;
+    }
+
+    /**
+     * A {@code CREATE TABLE} of this dialect states its columns between
+     * parentheses that no server will parse empty.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean canCreateWithoutColumns() {
+        return false;
+    }
+
+    /**
+     * A table of this dialect carries what the project owns in one thing only:
+     * which columns there are at all.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public IStatement adoptUnmanaged(IStatement projectSide, ISettings settings) {
+        MsTable project = projectSide instanceof MsTable table ? table : null;
+        List<MsColumn> forProject = StatementUtils.columnsForProjectFile(columns,
+                project == null ? null : project.columns,
+                ColumnVisibility.of(settings).forPair(project, this));
+        if (forProject == columns) {
+            return this;
+        }
+
+        MsTable adopted = (MsTable) deepCopy();
+        adopted.replaceColumns(forProject);
+        return attachCopy(adopted);
+    }
+
+    /**
+     * Replaces the columns of this table with copies of the given ones.
+     * <p>
+     * The one mutating step of the adoption of a column set, and the reason it is
+     * safe: only ever called on a freshly copied table, never on one a database
+     * still holds. The columns are copied in turn because a column belongs to the
+     * table it is added to, and some of them belong to the model of the project,
+     * which the caller may still be using.
+     */
+    private void replaceColumns(List<MsColumn> forProject) {
+        columns.clear();
+        for (MsColumn column : forProject) {
+            addColumn((MsColumn) column.deepCopy());
+        }
     }
 
     @Override
@@ -574,20 +712,28 @@ public class MsTable extends MsAbstractStatementContainer implements ITable, ISi
 
     @Override
     public boolean compare(IStatement obj) {
-        return compare(obj, true);
+        return compare(obj, true, ColumnVisibility.all());
     }
 
-    private boolean compare(IStatement obj, boolean checkColumnOrder) {
+    @Override
+    public boolean compareIgnoringUnmigratableColumns(ITable target, ISettings settings) {
+        return compare(target, !settings.isIgnoreColumnOrder(),
+                ColumnVisibility.of(settings).forPair(this, target));
+    }
+
+    private boolean compare(IStatement obj, boolean checkColumnOrder, ColumnVisibility managed) {
         if (this == obj) {
             return true;
         }
 
         if (obj instanceof MsTable table && super.compare(table)) {
+            List<MsColumn> mine = managed.visible(columns);
+            List<MsColumn> other = managed.visible(table.columns);
             boolean isColumnsEqual;
             if (checkColumnOrder) {
-                isColumnsEqual = columns.equals(table.columns);
+                isColumnsEqual = mine.equals(other);
             } else {
-                isColumnsEqual = Utils.setLikeEquals(columns, table.columns);
+                isColumnsEqual = Utils.setLikeEquals(mine, other);
             }
 
             return isColumnsEqual

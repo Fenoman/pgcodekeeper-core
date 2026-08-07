@@ -18,6 +18,7 @@ package org.pgcodekeeper.core.settings;
 import org.pgcodekeeper.core.Consts;
 import org.pgcodekeeper.core.database.api.formatter.IFormatConfiguration;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
+import org.pgcodekeeper.core.database.base.formatter.FormatConfiguration;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,6 +41,9 @@ public class CoreSettings extends AbstractSettings {
     private boolean disableCheckFunctionBodies;
     private boolean enableFunctionBodiesDependencies;
     private boolean ignoreColumnOrder;
+    private boolean ignoreSequenceCache;
+    private boolean noAlterTableOnly;
+    private boolean ignoreColumnStatistics;
     private boolean generateConstraintNotValid;
     private boolean dataMovementMode;
     private boolean concurrentlyMode;
@@ -59,6 +63,8 @@ public class CoreSettings extends AbstractSettings {
     private String timeZone;
     private String clusterName;
     private String inCharsetName = Consts.UTF_8;
+    private int jdbcFetchSize;
+    private boolean readAuthors = true;
 
     private List<String> preFilePath = new ArrayList<>();
     private List<String> postFilePath = new ArrayList<>();
@@ -162,6 +168,33 @@ public class CoreSettings extends AbstractSettings {
 
     public void setIgnoreColumnOrder(boolean ignoreColumnOrder) {
         this.ignoreColumnOrder = ignoreColumnOrder;
+    }
+
+    @Override
+    public boolean isIgnoreSequenceCache() {
+        return ignoreSequenceCache;
+    }
+
+    public void setIgnoreSequenceCache(boolean ignoreSequenceCache) {
+        this.ignoreSequenceCache = ignoreSequenceCache;
+    }
+
+    @Override
+    public boolean isNoAlterTableOnly() {
+        return noAlterTableOnly;
+    }
+
+    public void setNoAlterTableOnly(boolean noAlterTableOnly) {
+        this.noAlterTableOnly = noAlterTableOnly;
+    }
+
+    @Override
+    public boolean isIgnoreColumnStatistics() {
+        return ignoreColumnStatistics;
+    }
+
+    public void setIgnoreColumnStatistics(boolean ignoreColumnStatistics) {
+        this.ignoreColumnStatistics = ignoreColumnStatistics;
     }
 
     @Override
@@ -278,7 +311,7 @@ public class CoreSettings extends AbstractSettings {
     }
 
     public void setAllowedTypes(List<DbObjType> allowedTypes) {
-        this.allowedTypes = allowedTypes;
+        this.allowedTypes = new ArrayList<>(allowedTypes);
     }
 
     @Override
@@ -287,7 +320,7 @@ public class CoreSettings extends AbstractSettings {
     }
 
     public void setPreFilePath(List<String> preFilePath) {
-        this.preFilePath = preFilePath;
+        this.preFilePath = new ArrayList<>(preFilePath);
     }
 
     @Override
@@ -296,7 +329,7 @@ public class CoreSettings extends AbstractSettings {
     }
 
     public void setPostFilePath(List<String> postFilePath) {
-        this.postFilePath = postFilePath;
+        this.postFilePath = new ArrayList<>(postFilePath);
     }
 
     public void setClusterName(String clusterName) {
@@ -327,6 +360,27 @@ public class CoreSettings extends AbstractSettings {
     }
 
     @Override
+    public int getJdbcFetchSize() {
+        return jdbcFetchSize;
+    }
+
+    public void setJdbcFetchSize(int jdbcFetchSize) {
+        if (jdbcFetchSize < 0) {
+            throw new IllegalArgumentException("JDBC fetch size must not be negative");
+        }
+        this.jdbcFetchSize = jdbcFetchSize;
+    }
+
+    @Override
+    public boolean isReadAuthors() {
+        return readAuthors;
+    }
+
+    public void setReadAuthors(boolean readAuthors) {
+        this.readAuthors = readAuthors;
+    }
+
+    @Override
     public boolean isDisableAutoLoad() {
         return disableAutoLoad;
     }
@@ -335,11 +389,24 @@ public class CoreSettings extends AbstractSettings {
         this.disableAutoLoad = disableAutoLoad;
     }
 
+    private static IFormatConfiguration copyFormatConfiguration(IFormatConfiguration source) {
+        if (source == null) {
+            return null;
+        }
+        var copy = new FormatConfiguration();
+        copy.setIndentType(source.getIndentType());
+        copy.setIndentSize(source.getIndentSize());
+        copy.setAddWhitespaceBeforeOp(source.isAddWhitespaceBeforeOp());
+        copy.setAddWhitespaceAfterOp(source.isAddWhitespaceAfterOp());
+        copy.setRemoveTrailingWhitespace(source.isRemoveTrailingWhitespace());
+        return copy;
+    }
+
     @Override
     public CoreSettings shallowCopy() {
         var settings = new CoreSettings();
         settings.addTransaction = addTransaction;
-        settings.allowedTypes = allowedTypes;
+        settings.allowedTypes = new ArrayList<>(allowedTypes);
         settings.commentsToEnd = commentsToEnd;
         settings.concurrentlyMode = concurrentlyMode;
         settings.dataMovementMode = dataMovementMode;
@@ -350,12 +417,17 @@ public class CoreSettings extends AbstractSettings {
         settings.generateExistDoBlock = generateExistDoBlock;
         settings.generateExists = generateExists;
         settings.ignoreColumnOrder = ignoreColumnOrder;
+        settings.ignoreColumnStatistics = ignoreColumnStatistics;
+        settings.ignoreSequenceCache = ignoreSequenceCache;
         settings.ignoreConcurrentModification = ignoreConcurrentModification;
         settings.ignorePrivileges = ignorePrivileges;
         settings.inCharsetName = inCharsetName;
+        settings.jdbcFetchSize = jdbcFetchSize;
         settings.keepNewlines = keepNewlines;
-        settings.postFilePath = postFilePath;
-        settings.preFilePath = preFilePath;
+        settings.noAlterTableOnly = noAlterTableOnly;
+        settings.readAuthors = readAuthors;
+        settings.postFilePath = new ArrayList<>(postFilePath);
+        settings.preFilePath = new ArrayList<>(preFilePath);
         settings.selectedOnly = selectedOnly;
         settings.simplifyView = simplifyView;
         settings.simplifyNotNull = simplifyNotNull;
@@ -365,7 +437,7 @@ public class CoreSettings extends AbstractSettings {
         settings.clusterName = clusterName;
         settings.parallelLoad = parallelLoad;
         settings.disableAutoLoad = disableAutoLoad;
-        settings.formatConfiguration = formatConfiguration;
+        settings.formatConfiguration = copyFormatConfiguration(formatConfiguration);
         settings.isAutoFormatObjectCode = isAutoFormatObjectCode;
         settings.isUseActualVersionSyntax = isUseActualVersionSyntax;
         return settings;

@@ -1,0 +1,2 @@
+SHOW ALL
+HIDE NONE t_audit_insert db=production type=TRIGGER

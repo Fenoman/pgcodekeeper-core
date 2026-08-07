@@ -1,0 +1,18 @@
+SET QUOTED_IDENTIFIER ON
+GO
+SET ANSI_NULLS ON
+GO
+CREATE TABLE [dbo].[only_hidden](
+    [c1] [bigint] NOT NULL,
+    [c2] [int] NOT NULL)
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+SET ANSI_NULLS ON
+GO
+CREATE TRIGGER [t_hidden]
+ON [dbo].[only_hidden]
+AFTER INSERT, UPDATE
+AS RAISERROR ('Notify!', 16, 10)
+GO

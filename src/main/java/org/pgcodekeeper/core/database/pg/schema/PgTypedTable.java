@@ -45,6 +45,14 @@ public class PgTypedTable extends PgAbstractRegularTable {
         this.ofType = ofType;
     }
 
+    /**
+     * A table of a composite type names only the columns whose definition it
+     * overrides, so the parentheses have to go along with the last of them: an
+     * empty pair of them is a syntax error, where a table of no columns at all
+     * is written as a plain {@code CREATE TABLE x OF t}. That happens once every
+     * override is a column an ignore list hides, and once again for a table
+     * whose overrides are all inherited.
+     */
     @Override
     protected void appendColumns(StringBuilder sbSQL, SQLScript script) {
         sbSQL.append(" OF ").append(ofType);
@@ -53,13 +61,13 @@ public class PgTypedTable extends PgAbstractRegularTable {
             sbSQL.append(" (\n");
 
             int start = sbSQL.length();
-            for (PgColumn column : columns) {
-                writeColumn(column, sbSQL, script);
-            }
+            writeColumns(sbSQL, script);
 
             if (start != sbSQL.length()) {
                 sbSQL.setLength(sbSQL.length() - 2);
                 sbSQL.append("\n)");
+            } else {
+                sbSQL.setLength(sbSQL.length() - 3);
             }
         }
     }

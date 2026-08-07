@@ -24,6 +24,7 @@ import org.pgcodekeeper.core.database.pg.formatter.PgFormatter;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 
 import java.util.*;
 import java.util.function.UnaryOperator;
@@ -38,6 +39,35 @@ public abstract class PgAbstractStatement extends AbstractStatement {
 
     protected PgAbstractStatement(String name) {
         super(name);
+    }
+
+    /**
+     * Reports whether an {@code ALTER TABLE} that would name its table with
+     * {@code ONLY} still does so.
+     * <p>
+     * This is the one place the caller's answer to
+     * {@link ISettings#isNoAlterTableOnly()} reaches statement generation:
+     * every site that writes {@code ONLY} because the change must not descend
+     * to inheritance children asks here, and gets {@code false} for all of them
+     * at once. Deciding it per object is impossible - a TimescaleDB hypertable
+     * rejects the word, and which tables are hypertables differs between the
+     * database a script is built against and the databases it is applied to.
+     * <p>
+     * A site that writes {@code ONLY} for a reason of its own does not ask.
+     * There are two, both {@code SET/RESET (...)}, at table and at column
+     * level: TimescaleDB accepts those with {@code ONLY}, so the word stays
+     * there whatever the setting says.
+     * <p>
+     * The rules a dialect has of its own stay where they are. This answer is
+     * their upper bound, never a replacement: where PostgreSQL itself refuses
+     * {@code ONLY} - on a declaratively partitioned parent - the site keeps
+     * refusing it as well.
+     *
+     * @param settings settings of the migration
+     * @return true if ONLY may be written
+     */
+    protected static boolean isNeedOnly(ISettings settings) {
+        return !settings.isNoAlterTableOnly();
     }
 
     @Override
@@ -113,6 +143,11 @@ public abstract class PgAbstractStatement extends AbstractStatement {
 
     @Override
     protected void alterPrivileges(AbstractStatement newObj, SQLScript script) {
+        alterPrivileges(newObj, script, null);
+    }
+
+    protected void alterPrivileges(AbstractStatement newObj, SQLScript script,
+                                   String revokeTargetName) {
         Set<IPrivilege> newPrivileges = newObj.getPrivileges();
 
         // if new object has all privileges from old object and if it doesn't have
@@ -126,7 +161,7 @@ public abstract class PgAbstractStatement extends AbstractStatement {
                 return;
             }
         }
-        super.alterPrivileges(newObj, script);
+        super.alterPrivileges(newObj, script, revokeTargetName);
     }
 
     @Override

@@ -16,6 +16,7 @@
 package org.pgcodekeeper.core.utils;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.ObjectOutputStream;
 import java.io.Reader;
 import java.io.Serializable;
@@ -31,6 +32,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -68,6 +70,12 @@ import org.xml.sax.SAXException;
 public final class Utils {
 
     private static final Logger LOG = LoggerFactory.getLogger(Utils.class);
+    private static final String UNKNOWN_VERSION = "unknown";
+    private static final String POM_PROPERTIES =
+            "/META-INF/maven/org.pgcodekeeper/pgcodekeeper-core/pom.properties";
+    private static final String VERSION = resolveVersion(
+            Utils.class.getPackage().getImplementationVersion(),
+            () -> Utils.class.getResourceAsStream(POM_PROPERTIES));
     private static final int ERROR_SUBSTRING_LENGTH = 20;
     /**
      * Secure random number generator instance.
@@ -179,6 +187,36 @@ public final class Utils {
     }
 
     /**
+     * Compares two names by Unicode code point.
+     * <p>
+     * The order does not depend on the default locale, on the collation data of
+     * the running JDK or on case-mapping rules, so it is reproducible between
+     * runs and machines. Unlike {@link String#compareTo(String)} supplementary
+     * characters are ordered after every character of the basic plane instead of
+     * by their surrogate halves.
+     *
+     * @param left  the first name, not null
+     * @param right the second name, not null
+     * @return a negative value, zero or a positive value as the first name
+     *         precedes, equals or follows the second one
+     */
+    public static int compareByCodePoints(String left, String right) {
+        int leftIndex = 0;
+        int rightIndex = 0;
+        while (leftIndex < left.length() && rightIndex < right.length()) {
+            int leftPoint = left.codePointAt(leftIndex);
+            int rightPoint = right.codePointAt(rightIndex);
+            if (leftPoint != rightPoint) {
+                return Integer.compare(leftPoint, rightPoint);
+            }
+            leftIndex += Character.charCount(leftPoint);
+            rightIndex += Character.charCount(rightPoint);
+        }
+
+        return Integer.compare(left.length() - leftIndex, right.length() - rightIndex);
+    }
+
+    /**
      * Processes newlines in a string according to the specified setting.
      *
      * @param text           the input text
@@ -195,11 +233,26 @@ public final class Utils {
      * @return the version string, or "unknown" if not available
      */
     public static String getVersion() {
-        var coreVer = Utils.class.getPackage().getImplementationVersion();
-        if (coreVer == null) {
-            coreVer = "unknown";
+        return VERSION;
+    }
+
+    static String resolveVersion(String implementationVersion, Supplier<InputStream> pomProperties) {
+        if (implementationVersion != null && !implementationVersion.isBlank()) {
+            return implementationVersion;
         }
-        return coreVer;
+
+        try (InputStream in = pomProperties.get()) {
+            if (in == null) {
+                return UNKNOWN_VERSION;
+            }
+
+            Properties properties = new Properties();
+            properties.load(in);
+            String mavenVersion = properties.getProperty("version");
+            return mavenVersion == null || mavenVersion.isBlank() ? UNKNOWN_VERSION : mavenVersion;
+        } catch (IOException | IllegalArgumentException e) {
+            return UNKNOWN_VERSION;
+        }
     }
 
     /**
@@ -377,31 +430,48 @@ public final class Utils {
     public static Pair<IDatabase, IDatabase> loadDatabases(ILoader oldDbLoader, ILoader newDbLoader,
             ISettings settings, IMonitor monitor)
             throws IOException, InterruptedException {
+        if (settings.requiresComparisonLoaderFactories()) {
+            throw new IllegalArgumentException(
+                    Messages.Utils_comparison_loader_factories_required);
+        }
+
         // clearing temporary fields in case of a restart
         settings.clearErrors();
         settings.resetVersion();
 
         oldDbLoader.preLoad();
         newDbLoader.preLoad();
-
-        Pair<IDatabase, IDatabase> pair;
+        long totalStart = PhaseTimer.start();
+        Pair<IDatabase, IDatabase> databases;
         if (settings.isParallelLoad()) {
-            pair = loadDatabasesInParallelMode(oldDbLoader, newDbLoader, monitor);
+            databases = loadDatabasesInParallelMode(oldDbLoader, newDbLoader, monitor);
         } else {
-            monitor.setTaskName(Messages.Utils_loading_old_database);
-            var oldDb = oldDbLoader.loadAndAnalyze();
-            monitor.worked(30);
-
-            monitor.setTaskName(Messages.Utils_loading_new_database);
-            var newDb = newDbLoader.loadAndAnalyze();
-            monitor.worked(30);
-            pair = new Pair<>(oldDb, newDb);
+            databases = loadDatabasesSequentially(oldDbLoader, newDbLoader, monitor);
         }
+        PhaseTimer.end("load_databases", totalStart);
 
         if (!settings.isIgnorePrivileges()) {
-            resetLibraryPrivileges(pair.first, pair.second);
+            resetLibraryPrivileges(databases.first, databases.second);
         }
-        return pair;
+        return databases;
+    }
+
+    private static Pair<IDatabase, IDatabase> loadDatabasesSequentially(ILoader oldDbLoader, ILoader newDbLoader,
+            IMonitor monitor)
+            throws IOException, InterruptedException {
+        monitor.setTaskName(Messages.Utils_loading_old_database);
+        long start = PhaseTimer.start();
+        var oldDb = oldDbLoader.loadAndAnalyze();
+        PhaseTimer.end("load_old_db", start, oldDbLoader.getClass().getSimpleName());
+        monitor.worked(30);
+
+        monitor.setTaskName(Messages.Utils_loading_new_database);
+        start = PhaseTimer.start();
+        var newDb = newDbLoader.loadAndAnalyze();
+        PhaseTimer.end("load_new_db", start, newDbLoader.getClass().getSimpleName());
+        monitor.worked(30);
+
+        return new Pair<>(oldDb, newDb);
     }
 
     /**
@@ -420,8 +490,8 @@ public final class Utils {
         // Parallel load
         monitor.setTaskName(Messages.Utils_loading_databases);
 
-        var oldDbFuture = CompletableFuture.supplyAsync(supplyLoader(oldDbLoader));
-        var newDbFuture = CompletableFuture.supplyAsync(supplyLoader(newDbLoader));
+        var oldDbFuture = CompletableFuture.supplyAsync(supplyLoader(oldDbLoader, "load_old_db"));
+        var newDbFuture = CompletableFuture.supplyAsync(supplyLoader(newDbLoader, "load_new_db"));
 
         try {
             CompletableFuture.allOf(oldDbFuture, newDbFuture).join();
@@ -464,10 +534,13 @@ public final class Utils {
         }
     }
 
-    private static Supplier<IDatabase> supplyLoader(ILoader oldDbLoader) {
+    private static Supplier<IDatabase> supplyLoader(ILoader loader, String phase) {
         return () -> {
             try {
-                return oldDbLoader.loadAndAnalyze();
+                long start = PhaseTimer.start();
+                var db = loader.loadAndAnalyze();
+                PhaseTimer.end(phase, start, loader.getClass().getSimpleName());
+                return db;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new CompletionException(e);

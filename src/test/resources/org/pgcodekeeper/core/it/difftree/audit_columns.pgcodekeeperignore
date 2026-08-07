@@ -1,0 +1,7 @@
+SHOW ALL
+HIDE NONE s_audit_id_create type=COLUMN
+HIDE NONE s_audit_id_modif type=COLUMN
+HIDE NONE s_create_date type=COLUMN
+HIDE NONE s_creator type=COLUMN
+HIDE NONE s_modif_date type=COLUMN
+HIDE NONE s_owner type=COLUMN

@@ -18,14 +18,21 @@ package org.pgcodekeeper.core.database.base.loader;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
+import java.util.Queue;
 
 import org.pgcodekeeper.core.database.api.formatter.IFormatConfiguration;
 import org.pgcodekeeper.core.database.api.jdbc.ISupportedVersion;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
+import org.pgcodekeeper.core.database.base.parser.AntlrTask;
+import org.pgcodekeeper.core.database.base.parser.ParserExecutionPolicy;
 import org.pgcodekeeper.core.dependencieslist.Dependency;
 import org.pgcodekeeper.core.ignorelist.IgnoreList;
+import org.pgcodekeeper.core.model.difftree.ColumnUsers;
 import org.pgcodekeeper.core.monitor.IMonitor;
+import org.pgcodekeeper.core.settings.AbstractSettings;
 import org.pgcodekeeper.core.settings.ISettings;
+import org.pgcodekeeper.core.settings.ProjectFileFilter;
+import org.pgcodekeeper.core.telemetry.IComparisonTelemetry;
 
 /**
  * View of the parent settings for library loading that prevents libraries
@@ -37,14 +44,34 @@ import org.pgcodekeeper.core.settings.ISettings;
  * or {@code .pgcodekeeperdependencies} files found in library sources are ignored.
  * Libraries inherit these settings from the main database configuration instead.
  */
-class LibSettings implements ISettings {
+class LibSettings implements ISettings, ParserTaskQueueProvider {
 
     private final ISettings parent;
     private final boolean isIgnorePrivileges;
+    private final Queue<AntlrTask<?>> parserTasks;
 
     public LibSettings(ISettings parent, boolean isIgnorePrivileges) {
+        this(parent, isIgnorePrivileges,
+                parent instanceof ParserTaskQueueProvider provider
+                        ? provider.getParserTaskQueue()
+                        : null);
+    }
+
+    LibSettings(ISettings parent, boolean isIgnorePrivileges,
+            Queue<AntlrTask<?>> parserTasks) {
         this.parent = parent;
         this.isIgnorePrivileges = isIgnorePrivileges;
+        this.parserTasks = parserTasks;
+    }
+
+    @Override
+    public Queue<AntlrTask<?>> getParserTaskQueue() {
+        return parserTasks;
+    }
+
+    @Override
+    public ProjectFileFilter getProjectFileFilter() {
+        return ProjectFileFilter.ALLOW_ALL;
     }
 
     @Override
@@ -74,9 +101,25 @@ class LibSettings implements ISettings {
 
     @Override
     public ISettings copy() {
-        ISettings copy = parent.copy();
+        ISettings copy = unwrapLibrarySettings(parent.copy());
         copy.setIgnorePrivileges(isIgnorePrivileges);
-        return copy;
+        if (copy.getProjectFileFilter() != ProjectFileFilter.ALLOW_ALL
+                && copy instanceof AbstractSettings mutableCopy) {
+            mutableCopy.setProjectFileFilter(ProjectFileFilter.ALLOW_ALL);
+        }
+        boolean requiresWrapper = parserTasks != null
+                || copy.getProjectFileFilter() != ProjectFileFilter.ALLOW_ALL;
+        return requiresWrapper
+                ? new LibSettings(copy, isIgnorePrivileges, parserTasks)
+                : copy;
+    }
+
+    private static ISettings unwrapLibrarySettings(ISettings settings) {
+        ISettings unwrapped = settings;
+        while (unwrapped instanceof LibSettings librarySettings) {
+            unwrapped = librarySettings.parent;
+        }
+        return unwrapped;
     }
 
     @Override
@@ -102,6 +145,17 @@ class LibSettings implements ISettings {
     @Override
     public IgnoreList getIgnoreList() {
         return parent.getIgnoreList();
+    }
+
+    /**
+     * The library shares the operation of its parent, and therefore its index of
+     * what names a column, exactly as it shares the ignore list that index is
+     * asked about. Falling back to the default here would leave a library with
+     * no operation to scope one to, which is not true of it: it is loaded by one.
+     */
+    @Override
+    public ColumnUsers getColumnUsers() {
+        return parent.getColumnUsers();
     }
 
     @Override
@@ -190,6 +244,31 @@ class LibSettings implements ISettings {
     }
 
     @Override
+    public boolean isIgnoreSequenceCache() {
+        return parent.isIgnoreSequenceCache();
+    }
+
+    @Override
+    public boolean isNoAlterTableOnly() {
+        return parent.isNoAlterTableOnly();
+    }
+
+    @Override
+    public boolean isIgnoreColumnStatistics() {
+        return parent.isIgnoreColumnStatistics();
+    }
+
+    @Override
+    public boolean isMigrationTargetOldSide() {
+        return parent.isMigrationTargetOldSide();
+    }
+
+    @Override
+    public boolean isSortColumnsForDisplay() {
+        return parent.isSortColumnsForDisplay();
+    }
+
+    @Override
     public boolean isEnableFunctionBodiesDependencies() {
         return parent.isEnableFunctionBodiesDependencies();
     }
@@ -237,6 +316,76 @@ class LibSettings implements ISettings {
     @Override
     public boolean isParallelLoad() {
         return parent.isParallelLoad();
+    }
+
+    @Override
+    public boolean isPgRoutineBodyHashFirst() {
+        return parent.isPgRoutineBodyHashFirst();
+    }
+
+    @Override
+    public boolean isPgRoutineBodySkipMatchedAnalysis() {
+        return parent.isPgRoutineBodySkipMatchedAnalysis();
+    }
+
+    @Override
+    public int getPgRoutineBodyResidualBatchCount() {
+        return parent.getPgRoutineBodyResidualBatchCount();
+    }
+
+    @Override
+    public long getPgRoutineBodyResidualBatchBytes() {
+        return parent.getPgRoutineBodyResidualBatchBytes();
+    }
+
+    @Override
+    public String getPgCatalogCacheDir() {
+        return parent.getPgCatalogCacheDir();
+    }
+
+    @Override
+    public long getPgCatalogCacheMaxMb() {
+        return parent.getPgCatalogCacheMaxMb();
+    }
+
+    @Override
+    public boolean isPgCatalogCacheRows() {
+        return parent.isPgCatalogCacheRows();
+    }
+
+    @Override
+    public boolean isPgCatalogCacheFingerprintProbe() {
+        return parent.isPgCatalogCacheFingerprintProbe();
+    }
+
+    @Override
+    public IComparisonTelemetry getComparisonTelemetry() {
+        return parent.getComparisonTelemetry();
+    }
+
+    @Override
+    public boolean requiresComparisonLoaderFactories() {
+        return parent.requiresComparisonLoaderFactories();
+    }
+
+    @Override
+    public int getJdbcFetchSize() {
+        return parent.getJdbcFetchSize();
+    }
+
+    @Override
+    public ParserExecutionPolicy getParserExecutionPolicy() {
+        return parent.getParserExecutionPolicy();
+    }
+
+    @Override
+    public boolean isReadAuthors() {
+        return parent.isReadAuthors();
+    }
+
+    @Override
+    public boolean isCollectObjectReferences() {
+        return parent.isCollectObjectReferences();
     }
 
     @Override

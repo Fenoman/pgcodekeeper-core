@@ -19,6 +19,7 @@ import java.util.Set;
 
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.IColumn;
+import org.pgcodekeeper.core.database.api.schema.ISubElement;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation;
 import org.pgcodekeeper.core.database.api.schema.meta.IMetaContainer;
 import org.pgcodekeeper.core.database.base.schema.*;
@@ -45,12 +46,35 @@ public class PgVexAnalysisLauncher extends PgAbstractAnalysisLauncher {
 
     @Override
     public Set<ObjectLocation> analyze(ParserRuleContext ctx, IMetaContainer meta) {
-        if (stmt instanceof IColumn) {
+        if (isWrittenInsideATable()) {
             return analyzeTableChildVex((VexContext) ctx, meta);
         }
 
         PgValueExpr expr = new PgValueExpr(meta);
         expr.analyze(new PgVex((VexContext) ctx));
         return expr.getDependencies();
+    }
+
+    /**
+     * Whether the expression belongs to the definition of a table, and its
+     * unqualified names are therefore the columns of that table.
+     * <p>
+     * A default and a generated expression are written on a column, and the
+     * {@code USING} and {@code WITH CHECK} of a policy are written on the table
+     * itself - all of them read the row the statement is about. Without the
+     * namespace of that table an unqualified name resolves to nothing at all:
+     * {@code findColumn} has no parent scope to ask at the top level, and the
+     * whole expression yields no dependency, which is how a policy came to depend
+     * on none of the columns it reads. A default of a function argument or of a
+     * domain, the other users of this launcher, are written outside any table and
+     * keep the bare namespace they had.
+     * <p>
+     * The same question the ClickHouse launcher asks, and it is asked of the two
+     * interfaces rather than of {@code PgPolicy} because a constraint and an index
+     * are {@code ISubElement} too and already answer it the same way through
+     * launchers of their own.
+     */
+    private boolean isWrittenInsideATable() {
+        return stmt instanceof IColumn || stmt instanceof ISubElement;
     }
 }

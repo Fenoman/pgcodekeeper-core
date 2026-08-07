@@ -42,9 +42,7 @@ public class PgSimpleTable extends PgAbstractRegularTable {
         sbSQL.append(" (\n");
 
         int start = sbSQL.length();
-        for (PgColumn column : columns) {
-            writeColumn(column, sbSQL, script);
-        }
+        writeColumns(sbSQL, script);
         if (start != sbSQL.length()) {
             sbSQL.setLength(sbSQL.length() - 2);
             sbSQL.append('\n');

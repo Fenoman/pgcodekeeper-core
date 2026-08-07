@@ -18,7 +18,6 @@ package org.pgcodekeeper.core.model.difftree;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.ignorelist.IgnoreList;
-import org.pgcodekeeper.core.ignorelist.IgnoredObject;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.ignorelist.IgnoredObject.AddStatus;
 import org.pgcodekeeper.core.model.difftree.TreeElement.DiffSide;
@@ -31,6 +30,11 @@ import java.util.*;
  * Utility class for flattening tree structures with filtering capabilities.
  * Provides methods to filter tree elements based on selection status, edit state,
  * ignore lists, and object types while maintaining proper hierarchy traversal.
+ * <p>
+ * This is the second of the two passes that hide objects, and the only one that
+ * knows the name of the database, so it is where a rule scoped with {@code db=}
+ * is finally decided. A caller about to show the result to somebody may ask for
+ * what it leaves out to be counted, see {@link #countHiddenInto(HiddenObjects)}.
  */
 public final class TreeFlattener {
 
@@ -43,9 +47,11 @@ public final class TreeFlattener {
     private IgnoreList ignoreList;
     private String[] dbNames;
     private Collection<DbObjType> onlyTypes;
+    private HiddenObjects hiddenObjects = HiddenObjects.NONE;
 
     private final List<TreeElement> result = new ArrayList<>();
-    private final Deque<TreeElement> addSubtreeRoots = new ArrayDeque<>();
+    private IgnoreListFilter filter;
+    private HiddenObjects.Recorder hidden;
 
     /**
      * Configures the flattener to include only selected elements.
@@ -117,6 +123,27 @@ public final class TreeFlattener {
     }
 
     /**
+     * Asks this flattening to count the objects its ignore list leaves out, for
+     * a caller that is about to show the result to somebody, see
+     * {@link HiddenObjects}.
+     * <p>
+     * Opt in, and deliberately so. A tree is flattened on the way to a script,
+     * on the way to an export and on the way to the screen, all three with the
+     * same rules but not always the same database names, and only the one that
+     * feeds the screen describes what a reader is looking at. Counting every
+     * flattening into one holder would let the last one to run decide the number
+     * the first one earned.
+     *
+     * @param hiddenObjects the holder of the operation, see
+     *                      {@code ISettings.getHiddenObjects()}
+     * @return this TreeFlattener for method chaining
+     */
+    public TreeFlattener countHiddenInto(HiddenObjects hiddenObjects) {
+        this.hiddenObjects = hiddenObjects == null ? HiddenObjects.NONE : hiddenObjects;
+        return this;
+    }
+
+    /**
      * Flattens the tree structure applying all configured filters.
      *
      * @param root the root element to start flattening from
@@ -124,20 +151,26 @@ public final class TreeFlattener {
      */
     public List<TreeElement> flatten(TreeElement root) {
         result.clear();
-        addSubtreeRoots.clear();
+        filter = ignoreList == null ? null : new IgnoreListFilter(ignoreList, dbNames);
+        hidden = hiddenObjects.recorder(ignoreList, HiddenObjects.Pass.LIST);
         LOG.info(Messages.TreeFlattener_log_filter_obj);
         recurse(root);
+        hidden.publish();
         return result;
     }
 
     private void recurse(TreeElement el) {
-        AddStatus status = ignoreList != null ? getNameStatus(el) : AddStatus.ADD;
+        AddStatus status = filter != null ? filter.getStatus(el) : AddStatus.ADD;
 
         if (status == AddStatus.SKIP) {
             var msg = Messages.TreeFlattener_log_ignore_obj.formatted(el.getName());
             LOG.debug(msg);
+            // the children go on being visited below and may well be listed, so
+            // this leaves out the object itself and nothing more
+            hidden.hid(el, filter.decidedBy());
         }
         if (status == AddStatus.SKIP_SUBTREE) {
+            hidden.hidWithSubtree(el, filter.decidedBy());
             if (LOG.isDebugEnabled()) {
                 var msg = Messages.TreeFlattener_log_ignore_obj.formatted(el.getName());
                 LOG.debug(msg);
@@ -147,13 +180,13 @@ public final class TreeFlattener {
         }
 
         if (status == AddStatus.ADD_SUBTREE) {
-            addSubtreeRoots.push(el);
+            filter.enterSubtree(el);
         }
         for (TreeElement sub : el.getChildren()) {
             recurse(sub);
         }
         if (status == AddStatus.ADD_SUBTREE) {
-            addSubtreeRoots.pop();
+            filter.leaveSubtree();
         }
 
         if (el.getType() == DbObjType.DATABASE) {
@@ -167,72 +200,6 @@ public final class TreeFlattener {
                 || !el.getStatement(dbSource).compare(el.getStatement(dbTarget)))) {
             result.add(el);
         }
-    }
-
-    /**
-     * Determines the add status for a tree element based on ignore rules.
-     * Evaluates all matching rules and applies precedence logic.
-     *
-     * @param el           the tree element to evaluate
-     * @return the final add status for the element
-     */
-    private AddStatus getNameStatus(TreeElement el) {
-        AddStatus status = null;
-        for (IgnoredObject rule : ignoreList.getList()) {
-            if (match(rule, el)) {
-                AddStatus newStatus = rule.getAddStatus();
-                if (status == null) {
-                    status = newStatus;
-                } else if ((status == AddStatus.ADD || status == AddStatus.SKIP) &&
-                        (newStatus == AddStatus.ADD_SUBTREE || newStatus == AddStatus.SKIP_SUBTREE)) {
-                    // use wider rule
-                    status = newStatus;
-                } else if (status == AddStatus.ADD && newStatus == AddStatus.SKIP ||
-                        status == AddStatus.ADD_SUBTREE && newStatus == AddStatus.SKIP_SUBTREE) {
-                    // use hiding rule
-                    status = newStatus;
-                }
-            }
-        }
-
-        if (status != null) {
-            return status;
-        }
-
-        return !addSubtreeRoots.isEmpty() || ignoreList.isShow() ? AddStatus.ADD : AddStatus.SKIP;
-    }
-
-    /**
-     * Checks if this ignore rule matches the given tree element and database names.
-     *
-     * @param rule    rule
-     * @param el      the tree element to match against
-     * @return true if the rule matches the element
-     */
-    private boolean match(IgnoredObject rule, TreeElement el) {
-        boolean matches = rule.match(rule.isQualified() ? el.getQualifiedName() : el.getName());
-
-        var objTypes = rule.getObjTypes();
-        if (!objTypes.isEmpty()) {
-            matches = matches && objTypes.contains(el.getType());
-        }
-
-        var pattern = rule.getDbRegex();
-        if (matches && pattern != null) {
-            if (dbNames != null && dbNames.length != 0) {
-                boolean foundDbMatch = false;
-                for (String dbName : dbNames) {
-                    if (dbName != null && pattern.matcher(dbName).find()) {
-                        foundDbMatch = true;
-                        break;
-                    }
-                }
-                matches = foundDbMatch;
-            } else {
-                matches = false;
-            }
-        }
-        return matches;
     }
 
     private void writeChildrenInLog(TreeElement el) {

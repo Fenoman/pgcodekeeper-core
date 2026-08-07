@@ -117,6 +117,47 @@ public interface IStatement {
      */
     IStatement shallowCopy();
 
+    /**
+     * Takes over, from the state of this object the project holds, every value
+     * the given settings declare the project's own.
+     * <p>
+     * Asked by an export that is about to write this object over the file of the
+     * project, and by nothing else. A setting that keeps a property out of the
+     * comparison keeps it out of the difference tree as well, and with it goes
+     * the one thing that used to tell whoever pressed "apply to project" what
+     * the export was about to overwrite. The property is therefore carried over
+     * from the project rather than taken from here; everything else still comes
+     * from here.
+     * <p>
+     * The project may hold no state of this object at all - it is being added to
+     * the project, or a whole project is being written out of a database - and
+     * the question is still worth asking, because not every answer needs a
+     * project value to fall back on. A property does: with nothing to take over
+     * from, the state of the database is written. A rule that says pgCodeKeeper
+     * does not manage something does not: what the project does not manage is
+     * not written into it, whether the project already declares it or not, see
+     * {@code PgAbstractTable}.
+     * <p>
+     * Two promises hold whatever the dialect:
+     * <ul>
+     * <li>Neither this object nor the one handed over is written into. Both
+     * belong to models the caller may still be using, so a value is taken over
+     * into a copy or not at all.</li>
+     * <li>With nothing to take over - the common case, and the only one while
+     * every relaxation is off - this very object comes back, so the answer costs
+     * a comparison and no allocation.</li>
+     * </ul>
+     *
+     * @param projectSide the state of this object the project holds,
+     *                    {@code null} when the project holds none
+     * @param settings    the settings of the export, which name the properties
+     *                    the project owns
+     * @return this object, or a copy of it holding the values of the project
+     */
+    default IStatement adoptUnmanaged(IStatement projectSide, ISettings settings) {
+        return this;
+    }
+
     boolean compare(IStatement statement);
 
     /**
@@ -130,6 +171,32 @@ public interface IStatement {
      * @return all object dependencies
      */
     Set<ObjectReference> getDependencies();
+
+    /**
+     * Every column this statement names, wherever it keeps the name.
+     * <p>
+     * Asked of every statement of a database when a column is about to leave
+     * pgCodeKeeper's hands, to find out whether anything would be left standing
+     * on nothing, see {@code ColumnVisibility}. Dependencies answer that for all
+     * but one kind of statement: the references the analysis resolved for a view,
+     * a function, an index, a trigger, a policy and an extended statistics object
+     * all carry the very column that was read.
+     * <p>
+     * The exception is a sequence. The column an {@code OWNED BY} names is kept
+     * in a field of its own and never becomes a dependency, because the ordering
+     * of a migration around that clause is decided by rules written for it in
+     * particular - a sequence is detached before its column goes and attached
+     * after it arrives, see {@code ActionsToScriptConverter}. That is a good
+     * reason to leave the dependency graph as it is, and none at all to let a
+     * column the clause names be dropped from under it, so the question is asked
+     * here rather than answered out of {@code getDependencies} alone.
+     *
+     * @return the columns this statement names, as references of type
+     * {@link DbObjType#COLUMN}
+     */
+    default Stream<ObjectReference> getReferencedColumns() {
+        return getDependencies().stream().filter(ref -> DbObjType.COLUMN == ref.type());
+    }
 
     /**
      * Gets an unmodifiable set of privileges for this statement.

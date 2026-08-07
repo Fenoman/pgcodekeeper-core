@@ -91,6 +91,9 @@ public interface ISimpleOptionContainer extends IOptionContainer {
         option.setLength(option.length() - 2);
         sql.append("ALTER ");
         if (type == DbObjType.COLUMN) {
+            // AT_SetRelOptions / AT_SetOptions are on TimescaleDB's ONLY
+            // whitelist (process_utility.c:5074), so this form keeps the word
+            // even where ISettings.isNoAlterTableOnly drops it elsewhere.
             sql.append("TABLE ONLY ")
                     .append(getParent().getParent().getQuotedName())
                     .append('.').append(getParent().getQuotedName())

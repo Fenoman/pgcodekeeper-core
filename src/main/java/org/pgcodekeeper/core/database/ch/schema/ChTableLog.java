@@ -21,6 +21,7 @@ import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.base.schema.*;
 import org.pgcodekeeper.core.hasher.Hasher;
+import org.pgcodekeeper.core.settings.ISettings;
 
 /**
  * Represents a ClickHouse Log family table that supports constraints.
@@ -40,8 +41,8 @@ public class ChTableLog extends ChTable {
     }
 
     @Override
-    protected void appendTableBody(StringBuilder sb) {
-        super.appendTableBody(sb);
+    protected void appendTableBody(StringBuilder sb, ISettings settings) {
+        super.appendTableBody(sb, settings);
         for (var constr : constrs) {
             sb.append("\n\tCONSTRAINT ").append(constr.getQuotedName()).append(' ')
                     .append(constr.getDefinition()).append(',');
@@ -66,9 +67,26 @@ public class ChTableLog extends ChTable {
         super.addChild(st);
     }
 
+    /**
+     * The {@code CHECK} of a Log table is written inside the body of the
+     * {@code CREATE} as the text it came in, and is held neither among the
+     * constraints of this table nor among its children -
+     * {@link #getConstraints()} does not report it and no walk of the database
+     * reaches it - so nothing else can speak for the columns it reads. A column
+     * one of them names therefore cannot be left out: the body would state a
+     * column it does not declare.
+     * <hr><br>
+     * {@inheritDoc}
+     */
     @Override
-    protected boolean isNotEmptyTable() {
-        return super.isNotEmptyTable() || !constrs.isEmpty();
+    public Collection<String> getClausesNamingColumns() {
+        if (constrs.isEmpty()) {
+            return super.getClausesNamingColumns();
+        }
+
+        List<String> clauses = new ArrayList<>(super.getClausesNamingColumns());
+        constrs.forEach(constr -> clauses.add(constr.getDefinition()));
+        return clauses;
     }
 
     @Override

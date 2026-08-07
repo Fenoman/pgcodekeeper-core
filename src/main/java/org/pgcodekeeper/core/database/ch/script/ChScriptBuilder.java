@@ -21,8 +21,8 @@ import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.base.script.AbstractScriptBuilder;
 import org.pgcodekeeper.core.model.difftree.TreeElement;
-import org.pgcodekeeper.core.model.graph.ActionContainer;
 import org.pgcodekeeper.core.model.graph.ActionsToScriptConverter;
+import org.pgcodekeeper.core.model.graph.DepcyResolver;
 import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.ISettings;
 
@@ -32,12 +32,23 @@ public class ChScriptBuilder extends AbstractScriptBuilder {
         super(settings);
     }
 
+    /**
+     * ClickHouse names columns case-sensitively and needs no quoting to do it,
+     * so {@code NAME} and {@code name} are two columns as ordinary as any other
+     * two, and a migration that removes one and adds the other is doing exactly
+     * what it says.
+     */
     @Override
-    protected String getScript(Set<ActionContainer> actions, Set<IStatement> toRefresh,
+    protected boolean isRecasedColumnARename() {
+        return false;
+    }
+
+    @Override
+    protected String getScript(DepcyResolver.ResolvedActions resolved, Set<IStatement> toRefresh,
                                List<TreeElement> selected,
                                IDatabase oldDb, IDatabase newDb) {
         SQLScript script = new SQLScript(settings, oldDb.getSeparator());
-        ActionsToScriptConverter.fillScript(script, actions, toRefresh, oldDb, newDb, selected);
+        ActionsToScriptConverter.fillScript(script, resolved, toRefresh, oldDb, newDb, selected);
         return script.getFullScript();
     }
 }

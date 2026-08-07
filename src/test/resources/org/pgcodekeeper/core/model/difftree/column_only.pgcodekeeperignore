@@ -1,0 +1,3 @@
+SHOW ALL
+HIDE NONE payload type=COLUMN
+HIDE NONE t_audit_insert type=TRIGGER
