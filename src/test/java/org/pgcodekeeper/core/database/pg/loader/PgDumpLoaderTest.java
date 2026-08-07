@@ -28,13 +28,29 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PgDumpLoaderTest {
 
+    /**
+     * A body the grammar cannot read yields errors and leaves no launcher
+     * behind.
+     *
+     * <p>Upstream answers both questions during {@code load()}, because it
+     * parses every routine body while reading the CREATE statement. This
+     * branch defers that parse: the body travels into the launcher as text and
+     * is read when the analysis runs, which is what lets an unchanged body skip
+     * being parsed at all. Nothing is lost, it is simply answered one phase
+     * later -- five errors and no launcher, the same verdict upstream reaches
+     * one step sooner.</p>
+     *
+     * <p>Asking after {@code load()} alone would assert the timing rather than
+     * the behaviour, and would pass only for a loader that does the work this
+     * one exists to avoid.</p>
+     */
     @Test
     void skipAddAnalysisLauncherTest() throws IOException, InterruptedException {
         String resource = "broken_procedure.sql";
         var settings = new CoreSettings();
         settings.setEnableFunctionBodiesDependencies(true);
         var l = new PgDatabaseProvider().getDumpLoader(TestUtils.getFilePath(resource, getClass()), settings);
-        var db = l.load();
+        var db = l.loadAndAnalyze();
         assertFalse(l.getErrors().isEmpty());
         assertTrue(db.getAnalysisLaunchers().isEmpty());
     }
