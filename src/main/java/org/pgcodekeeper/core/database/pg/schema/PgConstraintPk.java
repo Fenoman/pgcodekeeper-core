@@ -41,6 +41,15 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
     private String withoutOverlapsColumn;
 
     /**
+     * Name of an existing index this constraint adopts via {@code USING INDEX
+     * <name>}, or null when the constraint lists its own columns instead. The
+     * two are mutually exclusive: PostgreSQL never reports a column list for
+     * an adopted index, so this is the only way the definition can be
+     * regenerated as anything but an empty, unparseable column list.
+     */
+    private String usingIndexName;
+
+    /**
      * Creates a new PostgreSQL PRIMARY KEY or UNIQUE constraint.
      *
      * @param name         constraint name
@@ -62,13 +71,17 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
                 sbSQL.append("NULLS NOT DISTINCT ");
             }
         }
-        StatementUtils.appendCols(sbSQL, columns, getQuoter());
-        if (withoutOverlapsColumn != null) {
-            sbSQL.setLength(sbSQL.length() - 1);
-            sbSQL
-                    .append(", ")
-                    .append(quote(withoutOverlapsColumn))
-                    .append(" WITHOUT OVERLAPS)");
+        if (usingIndexName != null) {
+            sbSQL.append("USING INDEX ").append(quote(usingIndexName));
+        } else {
+            StatementUtils.appendCols(sbSQL, columns, getQuoter());
+            if (withoutOverlapsColumn != null) {
+                sbSQL.setLength(sbSQL.length() - 1);
+                sbSQL
+                        .append(", ")
+                        .append(quote(withoutOverlapsColumn))
+                        .append(" WITHOUT OVERLAPS)");
+            }
         }
         appendIndexParam(sbSQL);
         return sbSQL.toString();
@@ -138,6 +151,17 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
         resetHash();
     }
 
+    /**
+     * Sets the name of the index this constraint adopts instead of building
+     * its own.
+     *
+     * @param usingIndexName name of the adopted index
+     */
+    public void setUsingIndexName(String usingIndexName) {
+        this.usingIndexName = usingIndexName;
+        resetHash();
+    }
+
     @Override
     public boolean isPrimaryKey() {
         return isPrimaryKey;
@@ -194,6 +218,7 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
         hasher.put(params);
         hasher.put(tablespace);
         hasher.put(withoutOverlapsColumn);
+        hasher.put(usingIndexName);
     }
 
     @Override
@@ -216,11 +241,12 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
                 && Objects.equals(includes, con.includes)
                 && Objects.equals(params, con.params)
                 && Objects.equals(tablespace, con.tablespace)
-                && Objects.equals(withoutOverlapsColumn, con.withoutOverlapsColumn);
+                && Objects.equals(withoutOverlapsColumn, con.withoutOverlapsColumn)
+                && Objects.equals(usingIndexName, con.usingIndexName);
     }
 
     @Override
-    protected PgConstraint getConstraintCopy() {
+    protected PgConstraint getConstraintCopy(String name) {
         var con = new PgConstraintPk(name, isPrimaryKey);
         con.setClustered(isClustered);
         con.setDistinct(isDistinct);
@@ -229,6 +255,7 @@ public class PgConstraintPk extends PgConstraint implements IConstraintPk, PgInd
         con.params.putAll(params);
         con.setTablespace(tablespace);
         con.setWithoutOverlapsColumn(withoutOverlapsColumn);
+        con.setUsingIndexName(usingIndexName);
         return con;
     }
 }

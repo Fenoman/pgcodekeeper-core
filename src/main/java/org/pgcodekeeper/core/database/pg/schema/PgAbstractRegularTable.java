@@ -15,8 +15,11 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.pg.schema;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.stream.Stream;
 
 import org.pgcodekeeper.core.database.api.schema.ISimpleOptionContainer;
 import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
@@ -124,7 +127,7 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
 
         // since 9.5 PostgreSQL
         if (isForceSecurity) {
-            script.addStatement(getRowLevel(" FORCE ", true));
+            script.addStatement(getRowLevel(" FORCE ", isNeedOnly(script.getSettings())));
         }
     }
 
@@ -169,7 +172,7 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
         // since 9.5 PostgreSQL
         if (isForceSecurity != newRegTable.isForceSecurity) {
             StringBuilder sql = new StringBuilder();
-            sql.append(getAlterTable(true))
+            sql.append(getAlterTable(isNeedOnly(script.getSettings())))
                     .append(newRegTable.isForceSecurity ? "" : " NO")
                     .append(" FORCE ROW LEVEL SECURITY");
             script.addStatement(sql);
@@ -288,6 +291,27 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
     }
 
     /**
+     * Gives the table the access method a file leaves unnamed, for the
+     * {@code ALTER TABLE ... SET ACCESS METHOD DEFAULT} a project file may
+     * carry.
+     * <p>
+     * The word names the setting rather than a method: measured on PostgreSQL
+     * 17.10 against a server carrying a second table access method, the
+     * statement leaves {@code pg_class.relam} at the one
+     * {@code default_table_access_method} names, and back at {@code heap} once
+     * the setting is reset. So the caller passes the value
+     * the file set, and a file that set none leaves the table with the method
+     * this class starts at - which is the state a {@code CREATE TABLE} of the
+     * same file builds, and the whole point of reading the statement at all.
+     *
+     * @param defaultMethod the access method the file declared as the default,
+     *                      {@code null} when it declared none
+     */
+    public void setDefaultMethod(String defaultMethod) {
+        setMethod(defaultMethod == null ? HEAP : defaultMethod);
+    }
+
+    /**
      * Checks if this table is logged (writes to WAL).
      *
      * @return true if logged, false if unlogged
@@ -323,6 +347,18 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
      */
     public String getPartitionBy() {
         return partitionBy;
+    }
+
+    /**
+     * A partition key and a Greenplum distribution key name their columns in
+     * text that no dependency of this table records.
+     */
+    @Override
+    public Collection<String> getClausesNamingColumns() {
+        if (partitionBy == null && distribution == null) {
+            return List.of();
+        }
+        return Stream.of(partitionBy, distribution).filter(Objects::nonNull).toList();
     }
 
     public void setPartitionBy(final String partitionBy) {

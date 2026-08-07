@@ -182,7 +182,18 @@ public abstract class PgConstraint extends PgAbstractStatement implements IConst
 
     protected abstract String getErrorCode();
 
-    protected abstract PgConstraint getConstraintCopy();
+    /**
+     * A copy of this constraint under the given name, carrying every field its
+     * own kind has.
+     * <p>
+     * Takes the name rather than reading {@link #name} because
+     * {@link #renamedCopy(String)} needs a copy under a different one and the
+     * name of a statement is final.
+     *
+     * @param name the name to build the copy under
+     * @return the copy, holding this kind's own fields and nothing else
+     */
+    protected abstract PgConstraint getConstraintCopy(String name);
 
     public void setNotValid(boolean isNotValid) {
         this.isNotValid = isNotValid;
@@ -241,7 +252,30 @@ public abstract class PgConstraint extends PgAbstractStatement implements IConst
 
     @Override
     protected PgConstraint getCopy() {
-        PgConstraint con = getConstraintCopy();
+        return fillCopy(getConstraintCopy(name));
+    }
+
+    /**
+     * This constraint under another name, for the {@code ALTER TABLE ... RENAME
+     * CONSTRAINT} of a project file. The name of a statement is final, so a
+     * rename is a new object and every field of the old one has to be carried
+     * into it - which is why this goes through the two lists the ordinary copy
+     * uses, {@link #getConstraintCopy(String)} and {@link #fillCopy}, rather
+     * than a third of its own. Same shape and same reason as
+     * {@link PgColumn#renamedCopy(String)}.
+     *
+     * @param newName the name to copy this constraint under
+     * @return the copy, parentless, for the table to adopt
+     */
+    public PgConstraint renamedCopy(String newName) {
+        return copyCommon(fillCopy(getConstraintCopy(newName)));
+    }
+
+    /**
+     * The fields every constraint carries whatever kind it is, filled into a
+     * copy that already holds its own kind's.
+     */
+    private PgConstraint fillCopy(PgConstraint con) {
         con.setNotValid(isNotValid);
         con.setDeferrable(deferrable);
         con.setInitially(initially);

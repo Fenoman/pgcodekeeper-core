@@ -39,6 +39,7 @@ import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
 import org.pgcodekeeper.core.database.base.schema.StatementUtils;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
+import org.pgcodekeeper.core.model.difftree.ColumnVisibility;
 import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
@@ -53,6 +54,22 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
     protected final List<ChColumn> columns = new ArrayList<>();
 
     private final Map<String, String> projections = new LinkedHashMap<>();
+
+    /**
+     * The body of every {@link #projections} entry as the comparison sees it,
+     * under the same key: the same tokens with canonical spacing, and the
+     * reserved words of the folded range {@code CHLexer.ALL..WITH} raised to
+     * upper case. Only that range folds - {@code SELECT} and {@code GROUP} are
+     * inside it, {@code BY} is not, so re-casing {@code BY} alone in a projection
+     * body still reads as a change.
+     * <p>
+     * {@link #projections} keeps the text the DDL is written from, because a
+     * project file must round-trip exactly as its author wrote it.
+     * {@link #addProjection(String, String, String)} takes a body and its
+     * normalized twin together, so a projection cannot be added to one map alone.
+     */
+    private final Map<String, String> projectionsNormalized = new LinkedHashMap<>();
+
     private final Map<String, String> options = new LinkedHashMap<>();
     private final Map<String, ChIndex> indexes = new LinkedHashMap<>();
     private final Map<String, ChConstraint> constraints = new LinkedHashMap<>();
@@ -80,8 +97,12 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
             sb.append(" ON CLUSTER ").append(clusterName);
         }
         sb.append("\n(");
-        appendTableBody(sb);
-        if (isNotEmptyTable()) {
+        int bodyStart = sb.length();
+        appendTableBody(sb, settings);
+        // the separator is taken off what was written rather than off what the
+        // table holds: a body that wrote nothing has no separator to take off,
+        // and taking one anyway ate the parenthesis it opened with
+        if (sb.length() > bodyStart) {
             sb.setLength(sb.length() - 1);
         }
         sb.append("\n)");
@@ -94,18 +115,30 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
         script.addStatement(sb);
     }
 
-    protected void appendTableBody(StringBuilder sb) {
-        for (ChColumn column : columns) {
+    /**
+     * The columns the body of a {@code CREATE} of this table is written with.
+     * <p>
+     * All of them. An ignore list is not asked here and is not asked anywhere
+     * else in the generator: hiding lives in the comparison, see
+     * {@link ColumnVisibility}. The one place the rules do decide which columns
+     * are written is a project file, see
+     * {@link StatementUtils#columnsForProjectFile(List, List, ColumnVisibility)},
+     * and that decision is taken before the statement reaches a generator.
+     *
+     * @return the columns of this table
+     */
+    protected List<ChColumn> columnsInCreateBody() {
+        return columns;
+    }
+
+    protected void appendTableBody(StringBuilder sb, ISettings settings) {
+        for (ChColumn column : StatementUtils.orderColumnsForWriting(columnsInCreateBody(), settings)) {
             sb.append("\n\t").append(column.getFullDefinition()).append(',');
         }
 
         for (Entry<String, String> proj : projections.entrySet()) {
             sb.append("\n\tPROJECTION ").append(proj.getKey()).append(' ').append(proj.getValue()).append(',');
         }
-    }
-
-    protected boolean isNotEmptyTable() {
-        return !columns.isEmpty() || !projections.isEmpty();
     }
 
     @Override
@@ -118,7 +151,7 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
             return ObjectState.RECREATE;
         }
 
-        compareProjections(newTable.projections, script);
+        compareProjections(newTable, script);
         engine.appendAlterSQL(newTable.engine, getAlterTable(), script);
         compareComment(newTable.getComment(), script);
         return getObjectState(script, startSize);
@@ -130,29 +163,34 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
                 && !engine.isModifybleSampleBy(newEngine);
     }
 
-    private void compareProjections(Map<String, String> newProjections, SQLScript script) {
-        if (Objects.equals(projections, newProjections)) {
+    /**
+     * Whether a projection changed is decided on the normalized bodies, so that
+     * a re-spaced one is not dropped and re-added; what the statement carries is
+     * the new table's own spelling.
+     */
+    private void compareProjections(ChTable newTable, SQLScript script) {
+        Map<String, String> newNormalized = newTable.projectionsNormalized;
+        if (Objects.equals(projectionsNormalized, newNormalized)) {
             return;
         }
         Set<String> toDrops = new HashSet<>();
         Map<String, String> toAdds = new LinkedHashMap<>();
 
-        for (Entry<String, String> projection : projections.entrySet()) {
+        for (Entry<String, String> projection : projectionsNormalized.entrySet()) {
             var key = projection.getKey();
-            if (!newProjections.containsKey(key)) {
+            if (!newNormalized.containsKey(key)) {
                 toDrops.add(key);
                 continue;
             }
-            var newValue = newProjections.get(key);
-            if (!Objects.equals(newValue, projection.getValue())) {
+            if (!Objects.equals(newNormalized.get(key), projection.getValue())) {
                 toDrops.add(key);
-                toAdds.put(key, newValue);
+                toAdds.put(key, newTable.projections.get(key));
             }
         }
 
-        for (Entry<String, String> newProjection : newProjections.entrySet()) {
+        for (Entry<String, String> newProjection : newTable.projections.entrySet()) {
             var key = newProjection.getKey();
-            if (!projections.containsKey(key)) {
+            if (!projectionsNormalized.containsKey(key)) {
                 toAdds.put(key, newProjection.getValue());
             }
         }
@@ -202,7 +240,7 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
 
     @Override
     public boolean compareIgnoringColumnOrder(ITable newTable) {
-        return compare(newTable, false);
+        return compare(newTable, false, ColumnVisibility.all());
     }
 
     @Override
@@ -227,14 +265,88 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
     }
 
     /**
-     * Adds a projection to this table.
+     * Adds a projection to this table, taking its body and the normalized twin
+     * together so that a caller cannot supply one half and forget the other.
      *
-     * @param key        the projection name
-     * @param expression the projection expression
+     * @param key                  the projection name
+     * @param expression           the projection body as written, used for DDL output
+     * @param expressionNormalized the same body normalized for comparison
      */
-    public void addProjection(String key, String expression) {
+    public void addProjection(String key, String expression, String expressionNormalized) {
         projections.put(key, expression);
+        projectionsNormalized.put(key, expressionNormalized);
         resetHash();
+    }
+
+    /**
+     * The parts of the body of this table that name its columns as text.
+     * <p>
+     * The engine names the columns it sorts and partitions by, and a projection
+     * selects the columns it is built over; neither is resolved to a reference
+     * and a projection is not even a child of this table, so nothing else can
+     * speak for the columns they name. Both are parts of the {@code CREATE TABLE}
+     * rather than statements about a column, so a column either of them names
+     * cannot be left out: the body would state a column it does not declare.
+     */
+    @Override
+    public Collection<String> getClausesNamingColumns() {
+        if (projections.isEmpty()) {
+            return engine == null ? List.of() : engine.getClausesNamingColumns();
+        }
+
+        List<String> clauses = new ArrayList<>(projections.values());
+        if (engine != null) {
+            clauses.addAll(engine.getClausesNamingColumns());
+        }
+        return clauses;
+    }
+
+    /**
+     * A {@code CREATE TABLE} of this dialect states its columns between
+     * parentheses that no server will parse empty.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean canCreateWithoutColumns() {
+        return false;
+    }
+
+    /**
+     * A table of this dialect carries what the project owns in one thing only:
+     * which columns there are at all.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public IStatement adoptUnmanaged(IStatement projectSide, ISettings settings) {
+        ChTable project = projectSide instanceof ChTable table ? table : null;
+        List<ChColumn> forProject = StatementUtils.columnsForProjectFile(columns,
+                project == null ? null : project.columns,
+                ColumnVisibility.of(settings).forPair(project, this));
+        if (forProject == columns) {
+            return this;
+        }
+
+        ChTable adopted = (ChTable) deepCopy();
+        adopted.replaceColumns(forProject);
+        return attachCopy(adopted);
+    }
+
+    /**
+     * Replaces the columns of this table with copies of the given ones.
+     * <p>
+     * The one mutating step of the adoption of a column set, and the reason it is
+     * safe: only ever called on a freshly copied table, never on one a database
+     * still holds. The columns are copied in turn because a column belongs to the
+     * table it is added to, and some of them belong to the model of the project,
+     * which the caller may still be using.
+     */
+    private void replaceColumns(List<ChColumn> forProject) {
+        columns.clear();
+        for (ChColumn column : forProject) {
+            addColumn((ChColumn) column.deepCopy());
+        }
     }
 
     public void setEngine(ChEngine engine) {
@@ -242,13 +354,31 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
         resetHash();
     }
 
-    public void setPkExpr(String pkExpr) {
-        engine.setPrimaryKey(pkExpr);
+    /**
+     * Sets the {@code PRIMARY KEY} this table states among its elements rather
+     * than among its engine options. It is the same key either way and reaches
+     * the same engine field, so it has to be handed over the same way: as
+     * written, for the DDL, and normalized, for the comparison.
+     *
+     * @param pkExpr           expression text as written, used for DDL output
+     * @param pkExprNormalized the same expression normalized for comparison
+     */
+    public void setPkExpr(String pkExpr, String pkExprNormalized) {
+        engine.setPrimaryKey(pkExpr, pkExprNormalized);
         resetHash();
     }
 
+    /**
+     * The names of the columns whose data is moved into the recreated table,
+     * which are the columns that table was built with.
+     * <p>
+     * The recreated table is built with every column of the state it is built
+     * from, an ignore list notwithstanding, see {@link #columnsInCreateBody()}.
+     * Leaving a column out here would therefore not spare it - it would silently
+     * drop its data on a rebuild.
+     */
     protected List<String> getColsForMovingData(ChTable newTable) {
-        return newTable.columns.stream()
+        return newTable.columnsInCreateBody().stream()
                 .map(IColumn::getName)
                 .filter(this::containsColumn)
                 .toList();
@@ -391,7 +521,7 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
     public void computeHash(Hasher hasher) {
         hasher.putOrdered(columns);
         hasher.put(options);
-        hasher.put(projections);
+        hasher.put(projectionsNormalized);
         hasher.put(engine);
     }
 
@@ -403,20 +533,28 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
 
     @Override
     public boolean compare(IStatement obj) {
-        return compare(obj, true);
+        return compare(obj, true, ColumnVisibility.all());
     }
 
-    private boolean compare(IStatement obj, boolean checkColumnOrder) {
+    @Override
+    public boolean compareIgnoringUnmigratableColumns(ITable target, ISettings settings) {
+        return compare(target, !settings.isIgnoreColumnOrder(),
+                ColumnVisibility.of(settings).forPair(this, target));
+    }
+
+    private boolean compare(IStatement obj, boolean checkColumnOrder, ColumnVisibility managed) {
         if (this == obj) {
             return true;
         }
 
         if (obj instanceof ChTable table && super.compare(obj)) {
+            List<ChColumn> mine = managed.visible(columns);
+            List<ChColumn> other = managed.visible(table.columns);
             boolean isColumnsEqual;
             if (checkColumnOrder) {
-                isColumnsEqual = columns.equals(table.columns);
+                isColumnsEqual = mine.equals(other);
             } else {
-                isColumnsEqual = Utils.setLikeEquals(columns, table.columns);
+                isColumnsEqual = Utils.setLikeEquals(mine, other);
             }
 
             return isColumnsEqual
@@ -430,7 +568,7 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
 
     protected boolean compareTable(AbstractStatement obj) {
         return obj instanceof ChTable table
-                && Objects.equals(projections, table.projections)
+                && Objects.equals(projectionsNormalized, table.projectionsNormalized)
                 && Objects.equals(engine, table.engine);
     }
 
@@ -449,7 +587,8 @@ public class ChTable extends ChAbstractStatement implements ITable, IOptionConta
         }
         copy.options.putAll(options);
         copy.projections.putAll(projections);
-        copy.setEngine(engine);
+        copy.projectionsNormalized.putAll(projectionsNormalized);
+        copy.setEngine(ChEngine.copyOf(engine));
         return copy;
     }
 

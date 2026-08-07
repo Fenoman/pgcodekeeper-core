@@ -34,6 +34,46 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
     private String dataType;
     private String collation;
     private String defaultValue;
+
+    /**
+     * The default as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code SQLLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it - {@code IS}, for one - is still compared as written.
+     * <p>
+     * {@link #defaultValue} keeps the text the DDL is written from, because a
+     * project file must round-trip exactly as its author wrote it.
+     * <p>
+     * The two halves must be present or absent together, which is why
+     * {@link #setDefaultValue(String, String)} takes both at once:
+     * {@link #getCreationSQL(SQLScript)} decides from {@link #defaultValue}
+     * whether to write a {@code DEFAULT} clause at all, while
+     * {@link #computeHash(Hasher)} and {@link #compare(IStatement)} read only
+     * this field. Filling the raw half alone parts the two in both directions:
+     * the script carries a {@code DEFAULT} the comparison believes is not
+     * there, and a default the grammar could not read compares equal to no
+     * default at all, since an empty normalized half is exactly what a domain
+     * without a {@code DEFAULT} has. So the reader fills both halves with the
+     * catalog's own text before it submits the parse, and the finalizer
+     * overwrites the normalized one when the parse succeeds.
+     * <p>
+     * The gate in {@link #appendAlterSQL(IStatement, SQLScript)} reads the raw
+     * half instead, deliberately. It is reached while a script is already being
+     * written for something else - either for a domain the comparison called
+     * changed, or for one {@code DepcyResolver} pulled in behind such a change,
+     * where {@code addDropStatements} walks the reverse dependency graph into
+     * {@code tryToDrop} and {@code getObjectState}, and {@code
+     * addCreateStatements} does the same the other way round. Either way the
+     * walk starts from an object the comparison did select, which writes at
+     * least one statement of its own, so a merely re-spelled default adds one
+     * redundant {@code SET DEFAULT} to a script that had to be written anyway
+     * and never produces a script where there would otherwise be none. That
+     * bound is measured over the whole pipeline rather than reasoned about, and
+     * pinned whole by {@code PgTypesReaderDomainTest
+     * .aRespelledDefaultOnlyEverJoinsAnAlterThatWasNeededAnyway}.
+     */
+    private String defaultValueNormalized;
+
     private boolean notNull;
 
     /**
@@ -161,8 +201,13 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
         resetHash();
     }
 
-    public void setDefaultValue(String defaultValue) {
+    /**
+     * @param defaultValue           the default expression as written, used for DDL output
+     * @param defaultValueNormalized the same expression normalized for comparison
+     */
+    public void setDefaultValue(String defaultValue, String defaultValueNormalized) {
         this.defaultValue = defaultValue;
+        this.defaultValueNormalized = defaultValueNormalized;
         resetHash();
     }
 
@@ -187,6 +232,23 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
     }
 
     /**
+     * Removes a constraint by name, if the domain has one under that name.
+     * <p>
+     * The counterpart of {@link #addConstraint(PgConstraint)}, for the
+     * {@code ALTER DOMAIN ... DROP CONSTRAINT} a project file may carry: the
+     * file states the constraints the domain ends up with, so one it drops has
+     * to leave the model, or the database keeps a {@code CHECK} the project no
+     * longer has.
+     *
+     * @param name constraint name, spelled as {@link #addConstraint} received it
+     */
+    public void removeConstraint(String name) {
+        if (constraints.removeIf(c -> c.getName().equals(name))) {
+            resetHash();
+        }
+    }
+
+    /**
      * Adds a constraint to this domain.
      *
      * @param constraint constraint to add
@@ -202,7 +264,7 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
     public void computeHash(Hasher hasher) {
         hasher.put(dataType);
         hasher.put(collation);
-        hasher.put(defaultValue);
+        hasher.put(defaultValueNormalized);
         hasher.put(notNull);
         hasher.putUnordered(constraints);
     }
@@ -215,7 +277,7 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
         return obj instanceof PgDomain dom && super.compare(obj)
                 && Objects.equals(dataType, dom.dataType)
                 && Objects.equals(collation, dom.collation)
-                && Objects.equals(defaultValue, dom.defaultValue)
+                && Objects.equals(defaultValueNormalized, dom.defaultValueNormalized)
                 && notNull == dom.notNull
                 && Utils.setLikeEquals(constraints, dom.constraints);
     }
@@ -225,7 +287,7 @@ public class PgDomain extends PgAbstractStatement implements ISearchPath {
         PgDomain domainDst = new PgDomain(name);
         domainDst.setDataType(dataType);
         domainDst.setCollation(collation);
-        domainDst.setDefaultValue(defaultValue);
+        domainDst.setDefaultValue(defaultValue, defaultValueNormalized);
         domainDst.setNotNull(notNull);
         for (PgConstraint constr : constraints) {
             domainDst.addConstraint((PgConstraint) constr.deepCopy());

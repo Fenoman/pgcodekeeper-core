@@ -55,6 +55,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
     private String accessMethod;
     private String oids;
     private final Queue<AntlrTask<?>> antlrTasks;
+    private final boolean sortColumnsAfterParse;
 
     /**
      * Creates a new PostgreSQL SQL parser listener.
@@ -67,8 +68,15 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
      */
     public PgCustomParserListener(PgDatabase database, String filename, ParserListenerMode mode,
                                    ISettings settings, Queue<AntlrTask<?>> antlrTasks) {
+        this(database, filename, mode, settings, antlrTasks, true);
+    }
+
+    public PgCustomParserListener(PgDatabase database, String filename, ParserListenerMode mode,
+                                  ISettings settings, Queue<AntlrTask<?>> antlrTasks,
+                                  boolean sortColumnsAfterParse) {
         super(database, filename, mode, settings);
         this.antlrTasks = antlrTasks;
+        this.sortColumnsAfterParse = sortColumnsAfterParse;
     }
 
     /**
@@ -83,7 +91,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
         for (StatementContext s : rootCtx.statement()) {
             statement(s, stream);
         }
-        if (needAnalyze()) {
+        if (needAnalyze() && sortColumnsAfterParse) {
             db.sortColumns();
         }
     }
@@ -138,11 +146,11 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
         } else if (ctx.create_user_mapping_statement() != null) {
             p = new PgCreateUserMapping(ctx.create_user_mapping_statement(), db, getSettings());
         } else if (ctx.create_trigger_statement() != null) {
-            p = new PgCreateTrigger(ctx.create_trigger_statement(), db, getSettings());
+            p = new PgCreateTrigger(ctx.create_trigger_statement(), db, stream, getSettings());
         } else if (ctx.create_rewrite_statement() != null) {
-            p = new PgCreateRule(ctx.create_rewrite_statement(), db, getSettings());
+            p = new PgCreateRule(ctx.create_rewrite_statement(), db, stream, getSettings());
         } else if (ctx.create_policy_statement() != null) {
-            p = new PgCreatePolicy(ctx.create_policy_statement(), db, getSettings());
+            p = new PgCreatePolicy(ctx.create_policy_statement(), db, stream, getSettings());
         } else if (ctx.create_collation_statement() != null) {
             p = new PgCreateCollation(ctx.create_collation_statement(), db, getSettings());
         } else if (ctx.create_function_statement() != null) {
@@ -194,7 +202,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
     private void alter(Schema_alterContext ctx, CommonTokenStream stream) {
         PgParserAbstract p;
         if (ctx.alter_table_statement() != null) {
-            p = new PgAlterTable(ctx.alter_table_statement(), db, tablespace, stream, getSettings());
+            p = new PgAlterTable(ctx.alter_table_statement(), db, tablespace, accessMethod, stream, getSettings());
         } else if (ctx.alter_index_statement() != null) {
             p = new PgAlterIndex(ctx.alter_index_statement(), db, getSettings());
         } else if (ctx.alter_sequence_statement() != null) {
@@ -204,7 +212,7 @@ public final class PgCustomParserListener extends CustomParserListener<PgDatabas
         } else if (ctx.alter_materialized_view_statement() != null) {
             p = new PgAlterMatView(ctx.alter_materialized_view_statement(), db, getSettings());
         } else if (ctx.alter_domain_statement() != null) {
-            p = new PgAlterDomain(ctx.alter_domain_statement(), db, getSettings());
+            p = new PgAlterDomain(ctx.alter_domain_statement(), db, stream, getSettings());
         } else if (ctx.alter_fts_statement() != null) {
             p = new PgAlterFtsStatement(ctx.alter_fts_statement(), db, getSettings());
         } else if (ctx.alter_owner_statement() != null) {

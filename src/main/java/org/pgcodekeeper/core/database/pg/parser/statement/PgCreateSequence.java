@@ -69,10 +69,49 @@ public final class PgCreateSequence extends PgParserAbstract {
      * @param list     the list of sequence body contexts containing the options
      */
     public static void fillSequence(PgSequence sequence, List<Sequence_bodyContext> list) {
-        long inc = 1;
+        fillSequence(sequence, list, false);
+    }
+
+    /**
+     * Fills sequence properties from a list of sequence body contexts, either as
+     * a statement that creates the sequence or as one that alters it.
+     * <p>
+     * The two differ in what silence means. A {@code CREATE} that names no
+     * increment gives the sequence the default one and no bounds; an
+     * {@code ALTER} that names no increment leaves the increment the sequence
+     * already has. Everything else is read the same way by both, which is why
+     * they share this loop: a sequence option read by a second route is an option
+     * whose two spellings stop building one model.
+     * <p>
+     * {@code SEQUENCE NAME} is read by neither. It is a name, not a property, and
+     * the name of a statement is final - the callers that need it take it before
+     * they construct the sequence.
+     * <p>
+     * {@code OWNED BY NONE} takes the owner away rather than leaving it alone. It
+     * is the second half of one alternative of the grammar, told from the naming
+     * of a column here for the same reason {@code NO MAXVALUE} is told from
+     * silence about the maximum: the tool writes the statement itself - see
+     * {@code PgSequence.compareSequenceBody} - so a migration it generates has to
+     * be one it can read back.
+     *
+     * @param sequence the sequence object to populate
+     * @param list     the list of sequence body contexts containing the options
+     * @param isAlter  true when the list restates options of a sequence that
+     *                 already exists, so an option it does not name is kept
+     */
+    public static void fillSequence(PgSequence sequence, List<Sequence_bodyContext> list, boolean isAlter) {
+        Long inc = null;
         Long maxValue = null;
         Long minValue = null;
+        // the bound and the word taking it away are one alternative of the
+        // grammar, so "NO MAXVALUE" and "no maximum named" are told apart here
+        // and nowhere else. For a CREATE they mean the same thing; for an ALTER
+        // the first takes a maximum away and the second leaves it alone
+        boolean isMaxStated = false;
+        boolean isMinStated = false;
         for (Sequence_bodyContext body : list) {
+            isMaxStated |= body.MAXVALUE() != null;
+            isMinStated |= body.MINVALUE() != null;
             if (body.type != null) {
                 sequence.setDataType(body.type.getText());
             } else if (body.cache_val != null) {
@@ -97,10 +136,24 @@ public final class PgCreateSequence extends PgParserAbstract {
                         || word.NONE() == null) {
                     sequence.setOwnedBy(new ObjectReference(QNameParser.getThirdName(col),
                             QNameParser.getSecondName(col), QNameParser.getFirstName(col), DbObjType.COLUMN));
+                } else {
+                    // NONE is a statement and not silence, the way NO MAXVALUE is:
+                    // it takes the owning column away. Measured on PostgreSQL
+                    // 17.10, ALTER SEQUENCE s OWNED BY NONE removes the
+                    // deptype = 'a' row pg_depend held for the column. For a
+                    // CREATE the sequence has no owner to take away and this is a
+                    // fixed point, which is why the two statements can share it
+                    sequence.setOwnedBy(null);
                 }
             }
         }
-        sequence.setMinMaxInc(inc, maxValue, minValue, sequence.getDataType(), 0L);
+        if (isAlter) {
+            sequence.alterMinMaxInc(inc, maxValue, isMaxStated, minValue, isMinStated);
+        } else {
+            // a CREATE naming no increment gets the default one, and bounds it
+            // does not name are the boundaries of its type
+            sequence.setMinMaxInc(inc == null ? 1 : inc, maxValue, minValue, sequence.getDataType(), 0L);
+        }
     }
 
     @Override

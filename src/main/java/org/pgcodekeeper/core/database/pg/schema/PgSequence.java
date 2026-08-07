@@ -33,6 +33,7 @@ import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.script.SQLActionType;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -162,8 +163,13 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
         int startSize = script.getSize();
         PgSequence newSequence = (PgSequence) newCondition;
         StringBuilder sbSQL = new StringBuilder();
+        boolean ownerChanged = !Objects.equals(owner, newSequence.owner)
+                && newSequence.owner != null;
+        String revokeTargetName = Objects.equals(getQualifiedName(), newSequence.getQualifiedName())
+                ? null
+                : "SEQUENCE " + newSequence.getQualifiedName();
 
-        if (compareSequenceBody(newSequence, sbSQL)) {
+        if (compareSequenceBody(newSequence, sbSQL, script.getSettings())) {
             script.addStatement(ALTER_SEQUENCE + newSequence.getQualifiedName() + sbSQL);
         }
 
@@ -177,7 +183,13 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
             script.addStatement(sql);
         }
 
-        alterPrivileges(newSequence, script);
+        if (ownerChanged) {
+            var privilegeScript = new SQLScript(script.getSettings(), newSequence.getSeparator());
+            alterPrivileges(newSequence, privilegeScript, revokeTargetName);
+            script.addAllStatements(privilegeScript, SQLActionType.END);
+        } else {
+            alterPrivileges(newSequence, script, revokeTargetName);
+        }
         appendAlterComments(newSequence, script);
 
         if (!Objects.equals(ownedBy, newSequence.ownedBy)) {
@@ -193,7 +205,7 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
         if (!Objects.equals(owner, newOwner) && newOwner != null) {
             StringBuilder sb = new StringBuilder();
             sb.append(ALTER_SEQUENCE);
-            appendFullName(sb);
+            sb.append(newObj.getQualifiedName());
             sb.append(" OWNER TO ").append(quote(newOwner));
 
             script.addStatement(sb.toString(), SQLActionType.END);
@@ -201,7 +213,7 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
     }
 
 
-    private boolean compareSequenceBody(PgSequence newSequence, StringBuilder sbSQL) {
+    private boolean compareSequenceBody(PgSequence newSequence, StringBuilder sbSQL, ISettings settings) {
         final String oldType = dataType;
         final String newType = newSequence.dataType;
 
@@ -239,7 +251,7 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
         }
 
         final String newCache = newSequence.cache;
-        if (newCache != null && !newCache.equals(cache)) {
+        if (!settings.isIgnoreSequenceCache() && newCache != null && !newCache.equals(cache)) {
             sbSQL.append("\n\tCACHE ");
             sbSQL.append(newCache);
         }
@@ -257,6 +269,43 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
         }
 
         return !sbSQL.isEmpty();
+    }
+
+    /**
+     * Applies the increment and the bounds an {@code ALTER} names, keeping the
+     * ones it does not.
+     * <p>
+     * This is the one difference between altering a sequence and creating one, so
+     * it is the only part of reading a {@code sequence_body} that is not shared
+     * between them: a {@code CREATE} that says nothing about the maximum means
+     * the boundary of the type, while an {@code ALTER} that says nothing about it
+     * means the maximum the sequence already has. Everything the three fields are
+     * normalized by - the sign of the increment, the boundary of the type, the
+     * start value derived from the minimum - is left to
+     * {@link #setMinMaxInc(long, Long, Long, String, long)}, which this hands the
+     * merged values to, so the two routes cannot come to disagree about what a
+     * value means.
+     * <p>
+     * A bound the statement does not name is handed back as it stands, which is a
+     * fixed point of that method: a {@code null} bound is the boundary of the type
+     * and is normalized back to {@code null}, and a bound that is not the boundary
+     * is not the boundary after the round trip either.
+     *
+     * @param inc          the increment the statement names, or null
+     * @param max          the maximum it names, null for {@code NO MAXVALUE}
+     * @param isMaxStated  whether it named a maximum at all
+     * @param min          the minimum it names, null for {@code NO MINVALUE}
+     * @param isMinStated  whether it named a minimum at all
+     */
+    public void alterMinMaxInc(Long inc, Long max, boolean isMaxStated, Long min, boolean isMinStated) {
+        // an increment is written by setMinMaxInc alone and every sequence that
+        // reaches here has been through it, on the parser side and on the reader
+        // side alike; the fallback is the default that method is given for a
+        // CREATE naming no increment
+        long newInc = inc != null ? inc : (increment == null ? 1 : Long.parseLong(increment));
+        Long newMax = isMaxStated ? max : (maxValue == null ? null : Long.valueOf(maxValue));
+        Long newMin = isMinStated ? min : (minValue == null ? null : Long.valueOf(minValue));
+        setMinMaxInc(newInc, newMax, newMin, dataType, 0L);
     }
 
     public void setMinMaxInc(long inc, Long max, Long min, String dataType, long precision) {
@@ -283,6 +332,14 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
 
     public void setStartWith(String startWith) {
         this.startWith = startWith;
+        // the start value is part of computeHash and hashCode caches its answer,
+        // so writing the field without this leaves two sequences hashing alike.
+        // Latent until now rather than harmless: every caller - both readers, the
+        // create, the alter and the copy - reaches a setter that does reset the
+        // hash straight after, so no route left it stale. This is the setter's
+        // own contract, which the class states of every hashed field, held
+        // without depending on the order its callers happen to keep
+        resetHash();
     }
 
     private long getBoundaryTypeVal(String type, boolean needMaxVal, long precision) {
@@ -316,6 +373,17 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
     public void setOwnedBy(final ObjectReference ownedBy) {
         this.ownedBy = ownedBy;
         resetHash();
+    }
+
+    /**
+     * The column of an {@code OWNED BY} is named by this sequence and by nothing
+     * else - it is held in a field rather than as a dependency, see
+     * {@link IStatement#getReferencedColumns()} - so it is added here.
+     */
+    @Override
+    public Stream<ObjectReference> getReferencedColumns() {
+        Stream<ObjectReference> declared = super.getReferencedColumns();
+        return ownedBy == null ? declared : Stream.concat(declared, Stream.of(ownedBy));
     }
 
     public void setDataType(String dataType) {
@@ -358,8 +426,25 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
 
     @Override
     public void computeHash(Hasher hasher) {
+        computeHash(hasher, false);
+    }
+
+    @Override
+    public int hashIgnoringCache() {
+        return hashIgnoringChildren(hasher -> computeHash(hasher, true));
+    }
+
+    /**
+     * The one place the state of a sequence is hashed, so that the hash without
+     * the cache cannot drift away from the hash with it.
+     *
+     * @param ignoreCache leaves the cache out of the hash
+     */
+    private void computeHash(Hasher hasher, boolean ignoreCache) {
         hasher.put(ownedBy == null ? 0 : ownedBy.hashCode());
-        hasher.put(cache);
+        if (!ignoreCache) {
+            hasher.put(cache);
+        }
         hasher.put(cycle);
         hasher.put(increment);
         hasher.put(maxValue);
@@ -371,12 +456,29 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
 
     @Override
     public boolean compare(IStatement obj) {
+        return compare(obj, false);
+    }
+
+    @Override
+    public boolean compareIgnoringCache(ISequence target) {
+        return compare(target, true);
+    }
+
+    /**
+     * The one place the state of a sequence is compared, so that the comparison
+     * without the cache cannot drift away from the comparison with it - the way
+     * a comparison written out a second time by hand eventually does, and then
+     * calls two objects equal that the hash still tells apart.
+     *
+     * @param ignoreCache leaves the cache out of the comparison
+     */
+    private boolean compare(IStatement obj, boolean ignoreCache) {
         if (this == obj) {
             return true;
         }
         return obj instanceof PgSequence seq && super.compare(obj)
                 && Objects.equals(ownedBy, seq.ownedBy)
-                && Objects.equals(cache, seq.cache)
+                && (ignoreCache || Objects.equals(cache, seq.cache))
                 && cycle == seq.cycle
                 && Objects.equals(increment, seq.increment)
                 && Objects.equals(maxValue, seq.maxValue)
@@ -384,6 +486,29 @@ public class PgSequence extends PgAbstractStatement implements ISequence {
                 && Objects.equals(dataType, seq.dataType)
                 && Objects.equals(startWith, seq.startWith)
                 && isLogged == seq.isLogged;
+    }
+
+    /**
+     * The cache is the project's while {@link ISettings#isIgnoreSequenceCache()}
+     * is on.
+     * <p>
+     * That setting exists because the value is maintained on the databases
+     * themselves, so the number standing in the project is the one deliberate
+     * statement about it the project makes - and, the difference being out of
+     * the comparison, the one nobody is shown before an export writes over it.
+     * <hr><br>
+     * {@inheritDoc}
+     */
+    @Override
+    public IStatement adoptUnmanaged(IStatement projectSide, ISettings settings) {
+        if (!settings.isIgnoreSequenceCache() || !(projectSide instanceof PgSequence project)
+                || Objects.equals(cache, project.cache)) {
+            return this;
+        }
+
+        PgSequence adopted = (PgSequence) deepCopy();
+        adopted.setCache(project.cache);
+        return attachCopy(adopted);
     }
 
     @Override

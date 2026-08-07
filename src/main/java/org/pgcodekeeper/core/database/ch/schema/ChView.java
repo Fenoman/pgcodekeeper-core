@@ -138,7 +138,7 @@ public class ChView extends ChAbstractStatement implements IView {
         }
 
         compareSqlSecurity(newView, script);
-        compareSql(newView.normalizedQuery, script);
+        compareSql(newView, script);
         compareComment(newView.getComment(), script);
 
         return getObjectState(script, startSize);
@@ -176,9 +176,19 @@ public class ChView extends ChAbstractStatement implements IView {
         script.addStatement(sb);
     }
 
-    private void compareSql(String newNormalizedSql, SQLScript script) {
-        if (!normalizedQuery.equals(newNormalizedSql)) {
-            script.addStatement(ALTER_TABLE + getQualifiedName() + "\n\tMODIFY QUERY " + newNormalizedSql);
+    /**
+     * Whether the query changed is decided on the normalized text, so that a
+     * re-spaced one writes nothing; what the statement carries is the new view's
+     * own spelling, the way {@link #getCreationSQL} carries it.
+     * <p>
+     * Only a materialized view reaches this: {@link #isViewModified} answers
+     * {@code true} for a changed query on any other kind, and
+     * {@link #appendAlterSQL} returns {@link ObjectState#RECREATE} before it
+     * gets here.
+     */
+    private void compareSql(ChView newView, SQLScript script) {
+        if (!normalizedQuery.equals(newView.normalizedQuery)) {
+            script.addStatement(ALTER_TABLE + getQualifiedName() + "\n\tMODIFY QUERY " + newView.query);
         }
     }
 
@@ -251,6 +261,7 @@ public class ChView extends ChAbstractStatement implements IView {
 
     public void setEngine(ChEngine engine) {
         this.engine = engine;
+        resetHash();
     }
 
     public void setDefiner(String definer) {
@@ -299,6 +310,24 @@ public class ChView extends ChAbstractStatement implements IView {
                 && Objects.equals(engine, view.engine);
     }
 
+    /**
+     * The columns are copied one at a time, the way {@code ChTable.getCopy}
+     * copies its own: a column is mutable through eight setters, so a copy
+     * handed the original's instances would let a write on either side reach
+     * the other. Not a rare shape - {@code DepcyGraph} copies the whole database
+     * under {@code Ownership.COPY}, the default for {@code DepcyFinder} and
+     * {@code SimpleDepcyResolver}.
+     * <p>
+     * What {@link #addColumn} does not do, and {@code ChTable.addColumn} does,
+     * is re-parent the column. That difference is deliberately left standing:
+     * {@code AbstractStatement.getCopy} never carries a parent, so a copied
+     * column arrives unparented exactly as the original one is, and the two
+     * hash the same. Handing a view's column the view as its parent would
+     * instead make the pair diverge - a copy is born an orphan, so its columns
+     * would name a shorter chain than the original's - and would point
+     * {@code ChColumn.getAlterTable} at a statement it casts to
+     * {@code ChTable}.
+     */
     @Override
     protected ChView getCopy() {
         ChView copy = new ChView(name);
@@ -309,8 +338,10 @@ public class ChView extends ChAbstractStatement implements IView {
         copy.setRefreshPeriod(refreshPeriod);
         copy.setDefiner(definer);
         copy.setSqlSecurity(sqlSecurity);
-        copy.columns.addAll(columns);
-        copy.setEngine(engine);
+        for (var colSrc : columns) {
+            copy.addColumn((ChColumn) colSrc.deepCopy());
+        }
+        copy.setEngine(ChEngine.copyOf(engine));
         return copy;
     }
 }

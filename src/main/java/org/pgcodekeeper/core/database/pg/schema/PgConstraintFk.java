@@ -87,6 +87,22 @@ public class PgConstraintFk extends PgConstraint implements IConstraintFk {
         }
     }
 
+    /**
+     * The one {@code ALTER CONSTRAINT} that states every alterable option this
+     * key changed, added to the script once - after the last clause has been
+     * appended, and only there.
+     * <p>
+     * The {@code NOT DEFERRABLE} branch used to add the builder itself as well,
+     * so a key that also changed enforcement produced two statements from one
+     * builder: the deferrability alone, and then the same text with the
+     * enforcement clause on the end. Both are legal and the pair still lands on
+     * the right state - measured on PostgreSQL 18.4, where a bare
+     * {@code NOT DEFERRABLE} leaves enforcement as it found it, so the order the
+     * two run in does not matter either - but the migration carried a statement
+     * that says nothing the next one does not. It stayed out of sight because
+     * {@code SQLScript} keeps statements in a {@code Set} and the two strings
+     * are equal whenever enforcement did not move.
+     */
     @Override
     protected void compareExtraOptions(PgConstraint newConstr, SQLScript script) {
         if (!super.compareUnalterable(newConstr)) {
@@ -96,7 +112,6 @@ public class PgConstraintFk extends PgConstraint implements IConstraintFk {
 
             if (deferrable != newConstr.deferrable && !newConstr.deferrable) {
                 sb.append(" NOT DEFERRABLE");
-                script.addStatement(sb);
             } else {
                 sb.append(" DEFERRABLE INITIALLY ").append(newConstr.initially ? "DEFERRED" : "IMMEDIATE");
             }
@@ -207,9 +222,32 @@ public class PgConstraintFk extends PgConstraint implements IConstraintFk {
         hasher.put(periodRefcolumn);
     }
 
+    /**
+     * Two foreign keys are the same only when their alterable flags agree too.
+     *
+     * <p>{@code compareUnalterable} deliberately leaves {@code deferrable},
+     * {@code initially} and {@code notEnforced} out: for a foreign key they can
+     * be changed in place, and {@link #compareExtraOptions} emits
+     * {@code ALTER CONSTRAINT} for exactly those. Dropping and recreating the
+     * constraint instead would revalidate every row of the table.
+     *
+     * <p>That answers whether the constraint can be altered. It does not answer
+     * whether it changed, and the base comparison asks only the first question,
+     * so a key that moved to {@code NOT DEFERRABLE} used to report itself
+     * unchanged while its hash said otherwise. {@code hashIgnoringChildren}
+     * states the rule that breaks: a pair only the hash tells apart must not be
+     * called equal. Until now the diff reached the right answer because
+     * {@code Comparison.compare} happens to test hashes first -- correctness
+     * resting on the order of two checks, which is how a relaxed branch once
+     * dropped four {@code ALTER CONSTRAINT} statements from a migration.
+     */
     @Override
     public boolean compare(IStatement obj) {
-        return this == obj || super.compare(obj);
+        return this == obj || super.compare(obj)
+                && obj instanceof PgConstraintFk con
+                && deferrable == con.deferrable
+                && initially == con.initially
+                && notEnforced == con.notEnforced;
     }
 
     @Override
@@ -229,7 +267,7 @@ public class PgConstraintFk extends PgConstraint implements IConstraintFk {
     }
 
     @Override
-    protected PgConstraint getConstraintCopy() {
+    protected PgConstraint getConstraintCopy(String name) {
         var con = new PgConstraintFk(name);
         con.setForeignSchema(foreignSchema);
         con.setForeignTable(foreignTable);

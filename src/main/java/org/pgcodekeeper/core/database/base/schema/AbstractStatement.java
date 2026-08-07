@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.pgcodekeeper.core.database.api.jdbc.ISupportedVersion;
@@ -122,12 +123,19 @@ public abstract class AbstractStatement implements IStatement, IHashable {
     }
 
     protected void alterPrivileges(AbstractStatement newObj, SQLScript script) {
+        alterPrivileges(newObj, script, null);
+    }
+
+    protected void alterPrivileges(AbstractStatement newObj, SQLScript script,
+                                   String revokeTargetName) {
         Set<IPrivilege> newPrivileges = newObj.getPrivileges();
 
         // first drop (revoke) missing grants
         for (IPrivilege privilege : privileges) {
             if (!privilege.isRevoke() && !newPrivileges.contains(privilege)) {
-                script.addStatement(privilege.getDropSQL());
+                script.addStatement(revokeTargetName == null
+                        ? privilege.getDropSQL()
+                        : getRetargetedDropSQL(privilege, revokeTargetName));
             }
         }
 
@@ -136,6 +144,16 @@ public abstract class AbstractStatement implements IStatement, IHashable {
             appendDefaultPrivileges(newObj, script);
             IPrivilege.appendPrivileges(newPrivileges, script);
         }
+    }
+
+    private static String getRetargetedDropSQL(IPrivilege privilege,
+                                                String revokeTargetName) {
+        if (privilege instanceof AbstractPrivilege abstractPrivilege) {
+            return abstractPrivilege.getDropSQL(revokeTargetName);
+        }
+        throw new IllegalStateException(
+                "Privilege implementation cannot retarget a revoke after object rename: "
+                        + privilege.getClass().getName());
     }
 
     protected void appendDefaultPrivileges(IStatement statement, SQLScript script) {
@@ -536,6 +554,67 @@ public abstract class AbstractStatement implements IStatement, IHashable {
         return h;
     }
 
+    /**
+     * Hashes this object without its children: everything {@link #hashCode()}
+     * puts into the hash except the {@link #computeChildrenHash(Hasher)} part.
+     * <p>
+     * Two states of the same object whose {@link #hashCode()} differs while this
+     * value matches carry their whole difference in their children. The value is
+     * deliberately not cached: it is only asked for while a diff tree decides
+     * whether an object has a change of its own, and caching it would double the
+     * per object memory of a comparison.
+     *
+     * @return the hash of this object alone
+     */
+    public final int hashIgnoringChildren() {
+        return hashIgnoringChildren(this::computeHash);
+    }
+
+    /**
+     * Hashes this object without its children, taking its own state from the
+     * given hook instead of from {@link #computeHash(Hasher)}.
+     * <p>
+     * The hook exists so that a subclass which offers a comparison leaving one
+     * of its fields out can offer the matching hash as well, built out of the
+     * very same parts {@link #hashCode()} is built of. Wherever a comparison for
+     * a diff is relaxed it still needs the guard {@code hashCode()} gives
+     * {@code equals()} everywhere else - the two do not always cover the same
+     * fields, and a pair only the hash tells apart must not be called equal -
+     * and that guard is only worth anything when it is relaxed in exactly the
+     * same place.
+     *
+     * @param ownState feeds the fields of this object into the hasher
+     * @return the hash of this object alone
+     */
+    protected final int hashIgnoringChildren(Consumer<Hasher> ownState) {
+        JavaHasher hasher = new JavaHasher();
+        computeLocalHash(hasher);
+        ownState.accept(hasher);
+        computeNamesHash(hasher);
+        return hasher.getResult();
+    }
+
+    /**
+     * Hashes the children of this object alone: the {@link
+     * #computeChildrenHash(Hasher)} part of {@link #hashCode()}.
+     * <p>
+     * It is the counterpart of {@link #compareChildren(AbstractStatement)}, and
+     * exists for the same reason {@code hashCode()} guards {@code equals()}
+     * wherever objects are compared for a diff: the two do not always cover the
+     * same fields. {@code PgConstraintFk} leaves {@code DEFERRABLE} out of its
+     * comparison while the hash keeps it, so a pair of tables whose only
+     * difference is the deferrability of a foreign key compares equal down to
+     * its children and is told apart by the hash alone. Not cached, for the same
+     * reason {@link #hashIgnoringChildren()} is not.
+     *
+     * @return the hash of the children of this object
+     */
+    public final int hashChildren() {
+        JavaHasher hasher = new JavaHasher();
+        computeChildrenHash(hasher);
+        return hasher.getResult();
+    }
+
     private void computeLocalHash(Hasher hasher) {
         hasher.put(name);
         hasher.put(owner);
@@ -632,7 +711,24 @@ public abstract class AbstractStatement implements IStatement, IHashable {
 
     @Override
     public final AbstractStatement shallowCopy() {
-        AbstractStatement copy = getCopy();
+        return copyCommon(getCopy());
+    }
+
+    /**
+     * Fills into a fresh copy of this statement everything every statement
+     * carries, whatever kind it is: the owner, the comment, the dependencies,
+     * the privileges and the metadata.
+     * <p>
+     * Split out of {@link #shallowCopy()} for the one caller that cannot use it -
+     * a copy made under a different name, since {@link #name} is final. There is
+     * exactly one such caller today, {@code PgColumn.renamedCopy}, and the split
+     * is what keeps it from growing a second list of fields to forget one from.
+     *
+     * @param <T>  the type of the copy, returned unchanged for chaining
+     * @param copy a copy of this statement holding its own fields already
+     * @return the copy
+     */
+    protected final <T extends AbstractStatement> T copyCommon(T copy) {
         copy.setOwner(owner);
         copy.setComment(comment);
         copy.deps.addAll(deps);
@@ -642,6 +738,30 @@ public abstract class AbstractStatement implements IStatement, IHashable {
     }
 
     protected abstract AbstractStatement getCopy();
+
+    /**
+     * Hangs a copy of this object from the parent this object hangs from.
+     * <p>
+     * A copy is born an orphan, and an orphan renders under a bare name and
+     * resolves to no project file: the qualified name of a statement and the
+     * path it is written to are both read from the chain above it. Made for
+     * {@link #adoptUnmanaged(IStatement, ISettings)}, whose answer stands in for
+     * this object in an export and must therefore be written exactly where this
+     * object would have been.
+     * <p>
+     * To be called after the values of the project have been written into the
+     * copy and not before: every setter resets the hash of the whole chain above
+     * the object it is called on, and that chain here belongs to a database the
+     * caller still holds.
+     *
+     * @param copy a fresh copy of this object
+     * @param <T>  the type of the copy
+     * @return the copy, hanging from the parent of this object
+     */
+    protected final <T extends AbstractStatement> T attachCopy(T copy) {
+        copy.setParent(parent);
+        return copy;
+    }
 
     @Override
     public String toString() {

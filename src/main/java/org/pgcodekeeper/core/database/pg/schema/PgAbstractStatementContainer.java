@@ -115,6 +115,28 @@ public abstract class PgAbstractStatementContainer extends PgAbstractStatement
     }
 
     /**
+     * Leaves this container with nothing clustered, for the
+     * {@code SET WITHOUT CLUSTER} a project file may carry.
+     * <p>
+     * The counterpart of the {@code CLUSTER ON} that has a writer already, and
+     * it looks where {@link #isClustered()} looks: a container states which of
+     * its children is the clustered one, so a file that stops clustering has to
+     * leave every one of them unclustered, or the model goes on describing a
+     * cluster the project removed.
+     * <p>
+     * Every index is asked rather than the one that answers, because the flag
+     * is a child's field and the statement names no child. Measured on
+     * PostgreSQL 17.10, the server does the same: after
+     * {@code SET WITHOUT CLUSTER} no {@code pg_index} row of the table has
+     * {@code indisclustered}.
+     */
+    public void clearClustered() {
+        for (PgIndex ind : getIndexes()) {
+            ind.setClustered(false);
+        }
+    }
+
+    /**
      * Finds index according to specified index {@code name}.
      *
      * @param name name of the index to be searched
@@ -185,11 +207,17 @@ public abstract class PgAbstractStatementContainer extends PgAbstractStatement
 
     /**
      * Adds an index to this container.
+     * Invalidates the schema-wide index lookup when this container is already
+     * attached to a schema; containers attached later invalidate it through
+     * the schema's own add methods.
      *
      * @param index the index to add
      */
     private void addIndex(final PgIndex index) {
         addUnique(indexes, index);
+        if (getParent() instanceof PgSchema schema) {
+            schema.invalidateIndexLookupCache();
+        }
     }
 
     /**
