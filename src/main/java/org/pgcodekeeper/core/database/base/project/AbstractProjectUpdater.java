@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -132,12 +131,15 @@ public abstract class AbstractProjectUpdater implements IProjectUpdater {
         boolean caughtProcessingEx = false;
         try (TempDir tmp = new TempDir(dirExport, "tmp-export")) { //$NON-NLS-1$
             Path dirTmp = tmp.get();
+            Path liveDir = overridesOnly ? dirExport.resolve(OVERRIDES_DIR) : dirExport;
+            Path backupDir = overridesOnly ? dirTmp.resolve(OVERRIDES_DIR) : dirTmp;
+            PartialExportBackup backup = new PartialExportBackup(liveDir, backupDir);
 
             try {
-                updatePartialInternal(dirTmp);
+                updatePartialInternal(backup);
             } catch (Exception ex) {
                 caughtProcessingEx = true;
-                tryToRestore(dirTmp, ex);
+                tryToRestorePartial(backup, tmp, ex);
                 throw new IOException(
                         Messages.ProjectUpdater_error_update.formatted(ex.getLocalizedMessage()), ex);
             }
@@ -150,6 +152,20 @@ public abstract class AbstractProjectUpdater implements IProjectUpdater {
         }
     }
 
+    /**
+     * Restores the whole project directory from a full backup taken by
+     * {@link #updateFull}, which is the only remaining caller: a full export
+     * may rewrite any top-level directory, so its rollback swaps all of them
+     * back in one go via {@link #restoreProjectDir}. A partial export, in
+     * contrast, only ever touches the handful of paths recorded by a
+     * {@link PartialExportBackup}, which is undone instead by
+     * {@link #tryToRestorePartial}.
+     *
+     * @param dirTmp the temp directory full top-level directories were moved into
+     * @param ex     the exception that triggered the rollback, logged and,
+     *               on a rollback failure, chained as a suppressed exception
+     * @throws IOException if the rollback itself fails
+     */
     private void tryToRestore(Path dirTmp, Exception ex) throws IOException {
         LOG.error(Messages.ProjectUpdater_log_update_err_restore_proj, ex);
         try {
@@ -162,43 +178,71 @@ public abstract class AbstractProjectUpdater implements IProjectUpdater {
         }
     }
 
-    private void updatePartialInternal(Path dirTmp) throws IOException, PgCodeKeeperException {
+    /**
+     * Undoes a failed partial export by replaying {@code backup} - restoring
+     * or deleting exactly the paths it recorded, nothing more.
+     * <p>
+     * Kept separate from {@link #tryToRestore(Path, Exception)}, which
+     * {@link #updateFull} still relies on: that path swaps whole top-level
+     * directories back into place because {@code exportFull()} may rewrite
+     * any of them, while a partial export only ever touches the paths
+     * {@code backup} already knows about - there is no whole-project backup
+     * left to fall back on here, by design.
+     * <p>
+     * WHY the snapshot outlives this method when the rollback fails: whatever
+     * {@code backup} could not put back is still sitting in {@code snapshot},
+     * and for a file the export had already overwritten that copy is the only
+     * one of its original bytes left anywhere. Letting the temp directory be
+     * cleaned up on the way out would delete it and turn a project someone
+     * can still repair by hand into one nobody can - which matters most where
+     * nobody is watching, since {@code --update-project} runs in CI. So the
+     * directory is kept and its path goes into the message of the exception
+     * that reports the failure, because a rescued copy nobody can find is the
+     * same as no copy at all.
+     *
+     * @param backup   the snapshot taken while the failed export was running
+     * @param snapshot the temp directory holding it, kept instead of deleted
+     *                 if the rollback fails
+     * @param ex       the exception that triggered the rollback, logged and,
+     *                 on a rollback failure, chained as a suppressed exception
+     * @throws IOException if the rollback itself fails
+     */
+    private void tryToRestorePartial(PartialExportBackup backup, TempDir snapshot, Exception ex) throws IOException {
+        LOG.error(Messages.ProjectUpdater_log_update_err_restore_proj, ex);
+        try {
+            backup.restore();
+        } catch (Exception exRestore) {
+            snapshot.keep();
+            LOG.error(Messages.ProjectUpdater_log_restoring_err, exRestore);
+            IOException exNew = new IOException(
+                    Messages.ProjectUpdater_error_backup_restore_kept.formatted(snapshot.get()), exRestore);
+            exNew.addSuppressed(ex);
+            throw exNew;
+        }
+    }
+
+    /**
+     * Runs the actual partial export, with {@code backup} wired in as the
+     * exporter's {@link PartialExportPathListener} so every path the export
+     * touches is snapshotted before it changes - see
+     * {@link PartialExportPathListener} for why that has to be the same
+     * decision the export itself makes, not a separate guess at it.
+     *
+     * @param backup the (still empty) snapshot to populate as the export runs
+     */
+    private void updatePartialInternal(PartialExportBackup backup) throws IOException, PgCodeKeeperException {
         LOG.info(Messages.ProjectUpdater_log_start_partial_update);
         if (overridesOnly) {
-            updateFolder(dirTmp, OVERRIDES_DIR);
-            createOverridesModelExporter(dirExport.resolve(OVERRIDES_DIR),
-                    dbNew, dbOld, changedObjects, encoding).exportPartial();
+            AbstractModelExporter exporter = createOverridesModelExporter(
+                    dirExport.resolve(OVERRIDES_DIR), dbNew, dbOld, changedObjects, encoding);
+            exporter.setPartialExportPathListener(backup);
+            exporter.exportPartial();
             return;
         }
 
-        for (String subdirName : listProjectDirs(dirExport, dirTmp)) {
-            updateFolder(dirTmp, subdirName);
-        }
-
-        createModelExporter(dirExport, dbNew, dbOld, changedObjects, encoding).exportPartial();
-    }
-
-    private void updateFolder(Path dirTmp, String folder) throws IOException {
-        final Path sourcePath = dirExport.resolve(folder);
-        if (Files.exists(sourcePath)) {
-            final Path targetPath = dirTmp.resolve(folder);
-
-            Files.walkFileTree(sourcePath, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs)
-                        throws IOException {
-                    Files.createDirectories(targetPath.resolve(sourcePath.relativize(dir)));
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
-                        throws IOException {
-                    Files.copy(file, targetPath.resolve(sourcePath.relativize(file)));
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        }
+        AbstractModelExporter exporter = createModelExporter(dirExport, dbNew, dbOld, changedObjects, encoding);
+        exporter.setPartialExportPathListener(backup);
+        exporter.exportPartial();
     }
 
     @Override

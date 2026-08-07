@@ -76,6 +76,13 @@ public abstract class AbstractOverridesModelExporter extends AbstractModelExport
         if (oldDb == null) {
             throw new PgCodeKeeperException(Messages.ModelExporter_log_old_database_not_null);
         }
+        // outDir (OVERRIDES/) may not exist yet on a project's first override
+        // export - created here, outside any PartialExportPathListener
+        // notification, since it is not a path any changeList element owns.
+        // A registered PartialExportBackup still accounts for this: it reads
+        // whether outDir already existed at its own construction time, which
+        // always runs before this method does, and prunes it on rollback if
+        // this call is the one that brought it into existence.
         if (Files.notExists(outDir)) {
             Files.createDirectories(outDir);
         } else if (!Files.isDirectory(outDir)) {
@@ -101,7 +108,9 @@ public abstract class AbstractOverridesModelExporter extends AbstractModelExport
             }
         }
 
-        Map<Path, StringBuilder> dumps = new HashMap<>();
+        // insertion-ordered so the write order follows list's own (deterministic,
+        // oldDb.getDescendants()-derived) order instead of HashMap's unspecified one
+        Map<Path, StringBuilder> dumps = new LinkedHashMap<>();
         list.stream()
                 .filter(st -> paths.contains(getRelativeFilePath(st)))
                 .forEach(st -> dumpStatement(st, dumps));
