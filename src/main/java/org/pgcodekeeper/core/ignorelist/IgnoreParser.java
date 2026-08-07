@@ -53,22 +53,44 @@ public final class IgnoreParser {
 
     /**
      * Parses an ignore list configuration file and adds the rules to the ignore list.
+     * <p>
+     * The parse is fail-fast: any syntax error or analysis failure raises an
+     * {@link IgnoreListParseException} instead of silently producing a
+     * partially populated (or empty) ignore list.
      *
      * @param listFile path to the ignore list configuration file
      * @return this parser instance for method chaining
-     * @throws IOException if there's an error reading the configuration file
+     * @throws IgnoreListParseException if the file contains syntax errors or cannot be analyzed
+     * @throws IOException              if there's an error reading the configuration file
      */
     public IgnoreParser parse(Path listFile) throws IOException {
         String parsedObjectName = listFile.toString();
         var msg = Messages.IgnoreParser_log_load_ignored_list.formatted(parsedObjectName);
         LOG.info(msg);
-        var parser = ParserUtils.createIgnoreListParser(listFile);
+        List<Object> errors = new ArrayList<>();
+        var parser = ParserUtils.createIgnoreListParser(listFile, errors);
 
+        Exception analyzeException = null;
         try {
             parse(parser);
         } catch (Exception ex) {
+            analyzeException = ex;
             var errorMsg = Messages.IgnoreParser_log_ignor_list_analyzing_err.formatted(parsedObjectName);
             LOG.error(errorMsg, ex);
+        }
+
+        if (!errors.isEmpty()) {
+            // syntax errors carry precise location info and usually explain
+            // any subsequent analysis failure, report them first
+            throw new IgnoreListParseException(
+                    Messages.IgnoreParser_error_bad_ignore_list.formatted(errors.get(0)),
+                    parsedObjectName, analyzeException);
+        }
+        if (analyzeException != null) {
+            throw new IgnoreListParseException(
+                    Messages.IgnoreParser_error_analyzing_ignore_list.formatted(
+                            parsedObjectName, analyzeException),
+                    parsedObjectName, analyzeException);
         }
         return this;
     }

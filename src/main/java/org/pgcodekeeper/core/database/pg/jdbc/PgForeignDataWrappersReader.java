@@ -31,6 +31,7 @@ import org.pgcodekeeper.core.database.pg.schema.*;
 public final class PgForeignDataWrappersReader extends PgAbstractJdbcReader{
 
     private final PgDatabase db;
+    private final boolean includePrivileges;
 
     /**
      * Creates a new foreign data wrappers reader.
@@ -41,6 +42,7 @@ public final class PgForeignDataWrappersReader extends PgAbstractJdbcReader{
     public PgForeignDataWrappersReader(PgJdbcLoader loader, PgDatabase db) {
         super(loader);
         this.db = db;
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -64,8 +66,10 @@ public final class PgForeignDataWrappersReader extends PgAbstractJdbcReader{
             PgParserAbstract.fillOptionParams(options, f::addOption, false, true, false);
         }
         loader.setComment(f, res);
-        loader.setOwner(f, res.getLong("fdwowner"));
-        loader.setPrivileges(f, res.getString("fdwacl"), null);
+        if (includePrivileges) {
+            loader.setOwner(f, res.getLong("fdwowner"));
+            loader.setPrivileges(f, res.getString("fdwacl"), null);
+        }
         loader.setAuthor(f, res);
         db.addChild(f);
     }
@@ -84,9 +88,11 @@ public final class PgForeignDataWrappersReader extends PgAbstractJdbcReader{
                 .column("res.fdwname")
                 .column("res.fdwhandler::pg_catalog.regproc")
                 .column("res.fdwvalidator::pg_catalog.regproc")
-                .column("res.fdwoptions")
-                .column("res.fdwacl")
-                .column("res.fdwowner")
-                .from("pg_catalog.pg_foreign_data_wrapper res");
+                .column("res.fdwoptions");
+        if (includePrivileges) {
+            builder.column("res.fdwacl")
+                    .column("res.fdwowner");
+        }
+        builder.from("pg_catalog.pg_foreign_data_wrapper res");
     }
 }

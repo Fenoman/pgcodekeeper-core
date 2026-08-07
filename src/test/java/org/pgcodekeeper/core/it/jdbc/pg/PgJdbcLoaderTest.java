@@ -15,10 +15,12 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.it.jdbc.pg;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.pgcodekeeper.core.settings.CoreSettings;
 
+@ResourceLock(AbstractPgGpJdbcLoaderTest.SHARED_PG_TEST_DATABASE)
 class PgJdbcLoaderTest extends AbstractPgGpJdbcLoaderTest {
 
     @ParameterizedTest

@@ -14,16 +14,28 @@
  * limitations under the License.
  *******************************************************************************/
 package org.pgcodekeeper.core.api;
-import static org.mockito.Mockito.verify;
+
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
 import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
 import org.pgcodekeeper.core.database.api.loader.ILoader;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
+import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.monitor.IMonitor;
 import org.pgcodekeeper.core.settings.CoreSettings;
 import org.pgcodekeeper.core.utils.Utils;
@@ -40,6 +52,9 @@ import org.pgcodekeeper.core.utils.Utils;
  * <p>Uses Mockito to simulate {@link ILoader} and {@link IMonitor} behavior.
  */
 class ParallelLoadTest {
+
+    private static final long WAIT_SECONDS = 5;
+    private static final String EXISTING_ERROR = "existing error";
 
     private ILoader oldDbLoader;
     private ILoader newDbLoader;
@@ -86,5 +101,74 @@ class ParallelLoadTest {
 
         assertEquals(ioException, thrown);
         verify(subMonitor).setCancelled(true);
+    }
+
+    @Test
+    void directLoaderPathRejectsFactoryRequiredSettingsBeforePreLoad() {
+        var settings = new CoreSettings();
+        settings.setPgRoutineBodyHashFirst(true);
+        settings.addError(EXISTING_ERROR);
+        settings.setVersion(PgSupportedVersion.VERSION_14);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> Utils.loadDatabases(
+                        oldDbLoader, newDbLoader, settings, subMonitor));
+
+        assertEquals(Messages.Utils_comparison_loader_factories_required,
+                failure.getMessage());
+        assertEquals(List.of(EXISTING_ERROR), settings.getErrors());
+        assertSame(PgSupportedVersion.VERSION_14, settings.getVersion());
+        verifyNoInteractions(oldDbLoader, newDbLoader);
+        verifyNoInteractions(subMonitor);
+    }
+
+    @Test
+    void directLoaderParallelPathRetainsOrdinaryLifecycle()
+            throws IOException, InterruptedException {
+        var bothStarted = new CountDownLatch(2);
+        var oldWorker = new AtomicReference<Thread>();
+        var newWorker = new AtomicReference<Thread>();
+        when(oldDbLoader.loadAndAnalyze()).thenAnswer(invocation ->
+                loadAfterBothStarted(oldDb, oldWorker, bothStarted));
+        when(newDbLoader.loadAndAnalyze()).thenAnswer(invocation ->
+                loadAfterBothStarted(newDb, newWorker, bothStarted));
+        var settings = new CoreSettings();
+        settings.setParallelLoad(true);
+
+        var databases = Utils.loadDatabases(
+                oldDbLoader, newDbLoader, settings, subMonitor);
+
+        assertSame(oldDb, databases.getFirst());
+        assertSame(newDb, databases.getSecond());
+        assertEquals(0, bothStarted.getCount());
+        assertNotNull(oldWorker.get());
+        assertNotNull(newWorker.get());
+        assertNotSame(oldWorker.get(), newWorker.get());
+        var preloadOrder = inOrder(oldDbLoader, newDbLoader);
+        preloadOrder.verify(oldDbLoader).preLoad();
+        preloadOrder.verify(newDbLoader).preLoad();
+        verify(oldDbLoader).loadAndAnalyze();
+        verify(newDbLoader).loadAndAnalyze();
+        var monitorOrder = inOrder(subMonitor);
+        monitorOrder.verify(subMonitor).setTaskName(Messages.Utils_loading_databases);
+        monitorOrder.verify(subMonitor).worked(60);
+        verify(subMonitor, never()).setCancelled(true);
+        verify(oldDbLoader, never()).load();
+        verify(newDbLoader, never()).load();
+        verify(oldDbLoader, never()).cancel();
+        verify(newDbLoader, never()).cancel();
+        verify(oldDbLoader, never()).close();
+        verify(newDbLoader, never()).close();
+    }
+
+    private static IDatabase loadAfterBothStarted(IDatabase database,
+            AtomicReference<Thread> worker, CountDownLatch bothStarted)
+            throws InterruptedException {
+        worker.set(Thread.currentThread());
+        bothStarted.countDown();
+        if (!bothStarted.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+            throw new AssertionError("both direct loaders did not run concurrently");
+        }
+        return database;
     }
 }

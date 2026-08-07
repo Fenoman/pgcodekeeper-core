@@ -1,0 +1,6 @@
+CREATE FUNCTION public.bad_atomic()
+RETURNS integer
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT (;
+END;

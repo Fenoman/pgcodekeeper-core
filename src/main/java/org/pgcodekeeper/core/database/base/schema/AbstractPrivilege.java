@@ -59,10 +59,14 @@ public abstract class AbstractPrivilege implements IPrivilege {
     }
 
     protected String getSql(boolean isRevoke) {
+        return getSql(isRevoke, name);
+    }
+
+    private String getSql(boolean isRevoke, String targetName) {
         StringBuilder sb = new StringBuilder();
         sb.append(isRevoke ? REVOKE : GRANT).append(' ').append(permission);
-        if (name != null) {
-            sb.append(" ON ").append(name);
+        if (targetName != null) {
+            sb.append(" ON ").append(targetName);
         }
 
         sb.append(isRevoke ? " FROM " : " TO ").append(role);
@@ -81,6 +85,10 @@ public abstract class AbstractPrivilege implements IPrivilege {
     @Override
     public String getDropSQL() {
         return isRevoke() ? null : getSql(true);
+    }
+
+    String getDropSQL(String name) {
+        return isRevoke() ? null : getSql(true, name);
     }
 
     @Override

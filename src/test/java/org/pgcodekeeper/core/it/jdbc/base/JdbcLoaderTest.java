@@ -37,20 +37,27 @@ public abstract class JdbcLoaderTest {
 
     public static final String CLEAN_DB_SCRIPT = "clean db script";
 
-    private static final Map<String, IDatabase> START_CONF_DB_CACHE = new ConcurrentHashMap<>();
+    private static final Map<StartConfKey, IDatabase> START_CONF_DB_CACHE =
+            new ConcurrentHashMap<>();
+
+    private record StartConfKey(String url, boolean ignorePrivileges) {
+    }
 
     /**
      * Loads the start-configuration database from {@code url} using {@code databaseProvider}, caching it on first use
-     * and returning the cached instance on subsequent calls. The cache is keyed by {@code url}.
+     * and returning the cached instance on subsequent calls. Privilege-aware and
+     * privilege-ignoring snapshots are kept separate because they contain
+     * different schema-owner and ACL state.
      */
     protected IDatabase loadStartConfDb(IDatabaseProvider databaseProvider, String url, ISettings settings)
             throws IOException, InterruptedException {
-        var cached = START_CONF_DB_CACHE.get(url);
+        var key = new StartConfKey(url, settings.isIgnorePrivileges());
+        var cached = START_CONF_DB_CACHE.get(key);
         if (cached != null) {
             return cached;
         }
         var startConfDb = databaseProvider.getJdbcLoader(url, settings).loadAndAnalyze();
-        START_CONF_DB_CACHE.put(url, startConfDb);
+        START_CONF_DB_CACHE.put(key, startConfDb);
         return startConfDb;
     }
 

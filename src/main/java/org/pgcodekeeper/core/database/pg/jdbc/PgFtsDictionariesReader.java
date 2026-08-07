@@ -31,6 +31,8 @@ import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
  */
 public final class PgFtsDictionariesReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Constructs a new PgFtsDictionariesReader.
      *
@@ -38,6 +40,7 @@ public final class PgFtsDictionariesReader extends PgAbstractSearchPathJdbcReade
      */
     public PgFtsDictionariesReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -50,7 +53,9 @@ public final class PgFtsDictionariesReader extends PgAbstractSearchPathJdbcReade
             PgParserAbstract.fillOptionParams(options.replace(" = ", "=").split(", "), dic::addOption, false, false, true);
         }
 
-        loader.setOwner(dic, res.getLong("dictowner"));
+        if (includePrivileges) {
+            loader.setOwner(dic, res.getLong("dictowner"));
+        }
 
         String tmplname = res.getString("tmplname");
         String templateSchema = res.getString("tmplnspname");
@@ -81,9 +86,11 @@ public final class PgFtsDictionariesReader extends PgAbstractSearchPathJdbcReade
         addExtensionDepsCte(builder);
         addDescriptionPart(builder);
 
+        builder.column("res.dictname");
+        if (includePrivileges) {
+            builder.column("res.dictowner::bigint");
+        }
         builder
-                .column("res.dictname")
-                .column("res.dictowner::bigint")
                 .column("t.tmplname")
                 .column("n.nspname AS tmplnspname")
                 .column("res.dictinitoption")

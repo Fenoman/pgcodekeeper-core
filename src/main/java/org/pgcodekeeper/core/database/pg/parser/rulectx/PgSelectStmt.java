@@ -76,12 +76,17 @@ public class PgSelectStmt {
     /**
      * Returns the SELECT operations wrapper.
      *
-     * @return wrapper for the SELECT operations part of the statement
+     * @return wrapper for the SELECT operations part of the statement, or null
+     *         when parser recovery could not create the mandatory child
      */
     public PgSelectOps selectOps() {
-        // no null check since select_ops is mandatory in select_stmt
-        return isNp ? new PgSelectOps(selectNp.select_ops_no_parens())
-                : new PgSelectOps(select.select_ops());
+        if (isNp) {
+            Select_ops_no_parensContext ops = selectNp.select_ops_no_parens();
+            return ops == null ? null : new PgSelectOps(ops);
+        }
+
+        Select_opsContext ops = select.select_ops();
+        return ops == null ? null : new PgSelectOps(ops);
     }
 
     /**

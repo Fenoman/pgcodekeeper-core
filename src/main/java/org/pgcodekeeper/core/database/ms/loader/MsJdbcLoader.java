@@ -71,19 +71,37 @@ public final class MsJdbcLoader extends AbstractJdbcLoader<MsDatabase> {
 
     @Override
     public void preLoad() throws IOException, InterruptedException {
-        if (isPreloaded) {
-            return;
-        }
-        try (Connection connection = connector.getConnection();
-             Statement statement = connection.createStatement()) {
-            queryCheckMsVersion(statement);
-            isPreloaded = true;
+        try {
+            checkCatalogReaderCancellation();
+            if (isPreloaded) {
+                checkCatalogReaderCancellation();
+                return;
+            }
+            Connection ownedConnection = null;
+            Statement ownedStatement = null;
+            Throwable failure = null;
+            try {
+                ownedConnection = connector.getConnection();
+                registerActiveConnection(ownedConnection);
+                this.connection = ownedConnection;
+                checkCatalogReaderCancellation();
+
+                ownedStatement = ownedConnection.createStatement();
+                registerActiveStatement(ownedStatement);
+                this.statement = ownedStatement;
+                checkCatalogReaderCancellation();
+
+                queryCheckMsVersion(ownedStatement);
+            } catch (Exception | Error ex) {
+                failure = ex;
+            }
+
+            failure = finishOwnedJdbcResources(ownedConnection, ownedStatement, failure);
+            throwOwnedJdbcFailure(failure);
+            publishPreloaded();
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw ex;
-        } catch (Exception e) {
-            throw new IOException(Messages.Connection_DatabaseJdbcAccessError.formatted(getCurrentLocation(),
-                    e.getLocalizedMessage()), e);
         }
     }
 
@@ -93,15 +111,26 @@ public final class MsJdbcLoader extends AbstractJdbcLoader<MsDatabase> {
 
         LOG.info(Messages.JdbcLoader_log_reading_db_jdbc);
         setCurrentOperation(Messages.JdbcChLoader_log_connection_db);
-        try (Connection connection = connector.getConnection();
-             Statement statement = connection.createStatement()) {
-            this.connection = connection;
-            this.statement = statement;
+        Connection ownedConnection = null;
+        Statement ownedStatement = null;
+        Throwable failure = null;
+        try {
+            checkCatalogReaderCancellation();
+            ownedConnection = connector.getConnection();
+            registerActiveConnection(ownedConnection);
+            this.connection = ownedConnection;
+            checkCatalogReaderCancellation();
 
-            connection.setAutoCommit(false);
+            ownedStatement = ownedConnection.createStatement();
+            registerActiveStatement(ownedStatement);
+            this.statement = ownedStatement;
+            configureOwnedCatalogStatement(ownedStatement);
+            checkCatalogReaderCancellation();
+
+            ownedConnection.setAutoCommit(false);
             // TODO maybe not needed and/or may cause extra locking (compared to PG)
             // may need to be removed, Source Control seems to work in default READ COMMITTED state
-            getRunner().run(statement, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+            getRunner().run(ownedStatement, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
 
             LOG.info(Messages.JdbcLoader_log_read_db_objects);
             new MsSchemasReader(this, d).read();
@@ -121,17 +150,14 @@ public final class MsJdbcLoader extends AbstractJdbcLoader<MsDatabase> {
             IMonitor.checkCancelled(getMonitor());
             finishLoaders();
 
-            connection.commit();
-
-            LOG.info(Messages.JdbcLoader_log_succes_queried);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw ex;
-        } catch (Exception e) {
-            // connection is closed at this point
-            throw new IOException(Messages.Connection_DatabaseJdbcAccessError.formatted(getCurrentLocation(),
-                    e.getLocalizedMessage()), e);
+            ownedConnection.commit();
+        } catch (Exception | Error ex) {
+            failure = ex;
         }
+
+        failure = finishOwnedJdbcResources(ownedConnection, ownedStatement, failure);
+        throwOwnedJdbcFailure(failure);
+        LOG.info(Messages.JdbcLoader_log_succes_queried);
         return d;
     }
 

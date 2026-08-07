@@ -31,6 +31,8 @@ import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
  */
 public final class PgFtsConfigurationsReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Constructs a new PgFtsConfigurationsReader.
      *
@@ -38,6 +40,7 @@ public final class PgFtsConfigurationsReader extends PgAbstractSearchPathJdbcRea
      */
     public PgFtsConfigurationsReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -76,7 +79,9 @@ public final class PgFtsConfigurationsReader extends PgAbstractSearchPathJdbcRea
             dictMap.forEach(config::addDictionary);
         }
 
-        loader.setOwner(config, res.getLong("cfgowner"));
+        if (includePrivileges) {
+            loader.setOwner(config, res.getLong("cfgowner"));
+        }
         loader.setComment(config, res);
         loader.setAuthor(config, res);
         schema.addChild(config);
@@ -98,9 +103,11 @@ public final class PgFtsConfigurationsReader extends PgAbstractSearchPathJdbcRea
         addDescriptionPart(builder);
         addWordsPart(builder);
 
+        builder.column("res.cfgname");
+        if (includePrivileges) {
+            builder.column("res.cfgowner::bigint");
+        }
         builder
-                .column("res.cfgname")
-                .column("res.cfgowner::bigint")
                 .column("p.prsname")
                 .column("n.nspname AS prsnspname")
                 .from("pg_catalog.pg_ts_config res")

@@ -29,6 +29,8 @@ import org.pgcodekeeper.core.utils.Utils;
  */
 public final class PgCollationsReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Creates a new collations reader.
      *
@@ -36,6 +38,7 @@ public final class PgCollationsReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgCollationsReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -92,7 +95,9 @@ public final class PgCollationsReader extends PgAbstractSearchPathJdbcReader {
             }
         }
 
-        loader.setOwner(coll, res.getLong("collowner"));
+        if (includePrivileges) {
+            loader.setOwner(coll, res.getLong("collowner"));
+        }
         loader.setAuthor(coll, res);
 
         schema.addChild(coll);
@@ -116,9 +121,12 @@ public final class PgCollationsReader extends PgAbstractSearchPathJdbcReader {
         builder
                 .column("res.collname")
                 .column("res.collcollate")
-                .column("res.collctype")
-                .column("res.collowner::bigint")
-                .from("pg_catalog.pg_collation res");
+                .column("res.collctype");
+
+        if (includePrivileges) {
+            builder.column("res.collowner::bigint");
+        }
+        builder.from("pg_catalog.pg_collation res");
 
         if (PgSupportedVersion.GP_VERSION_7.isLE(loader.getVersion())) {
             builder

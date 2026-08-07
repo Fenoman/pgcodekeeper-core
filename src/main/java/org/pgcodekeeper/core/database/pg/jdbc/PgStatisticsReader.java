@@ -31,6 +31,8 @@ import org.pgcodekeeper.core.utils.Pair;
  */
 public final class PgStatisticsReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Creates a new PgStatisticsReader.
      *
@@ -38,6 +40,7 @@ public final class PgStatisticsReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgStatisticsReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -64,7 +67,9 @@ public final class PgStatisticsReader extends PgAbstractSearchPathJdbcReader {
             }
         }
 
-        loader.setOwner(stat, res.getLong("stxowner"));
+        if (includePrivileges) {
+            loader.setOwner(stat, res.getLong("stxowner"));
+        }
         loader.setAuthor(stat, res);
         loader.setComment(stat, res);
 
@@ -86,9 +91,11 @@ public final class PgStatisticsReader extends PgAbstractSearchPathJdbcReader {
         addExtensionSchemasCte(builder);
         addDescriptionPart(builder);
 
+        builder.column("res.stxname");
+        if (includePrivileges) {
+            builder.column("res.stxowner");
+        }
         builder
-                .column("res.stxname")
-                .column("res.stxowner")
                 .column("pg_catalog.pg_get_statisticsobjdef(res.oid::pg_catalog.oid) AS def")
                 .from("pg_catalog.pg_statistic_ext res");
 

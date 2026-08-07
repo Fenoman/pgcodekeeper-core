@@ -72,6 +72,9 @@ public abstract class PgAbstractSearchPathJdbcReader extends AbstractSearchPathJ
     @Override
     public QueryBuilder makeQuery() {
         var builder = super.makeQuery();
+        if (builder == null) {
+            return null;
+        }
         appendExtension(builder, loader.getExtensionSchema());
         return builder;
     }

@@ -33,6 +33,7 @@ import java.sql.SQLException;
 public class PgSchemasReader extends PgAbstractJdbcReader {
 
     private final PgDatabase db;
+    private final boolean includePrivileges;
 
     /**
      * Creates a new PgSchemasReader.
@@ -43,6 +44,7 @@ public class PgSchemasReader extends PgAbstractJdbcReader {
     public PgSchemasReader(PgJdbcLoader loader, PgDatabase db) {
         super(loader);
         this.db = db;
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -54,16 +56,21 @@ public class PgSchemasReader extends PgAbstractJdbcReader {
         }
 
         PgSchema s = new PgSchema(schemaName);
-        long owner = res.getLong("nspowner");
-
         if (!PgConsts.DEFAULT_SCHEMA.equals(schemaName)) {
-            loader.setOwner(s, owner);
+            if (includePrivileges) {
+                loader.setOwner(s, res.getLong("nspowner"));
+            }
             loader.setComment(s, res);
-        } else if (!"postgres".equals(loader.getRoleByOid(owner))) {
-            loader.setOwner(s, owner);
+        } else if (includePrivileges) {
+            long owner = res.getLong("nspowner");
+            if (!"postgres".equals(loader.getRoleByOid(owner))) {
+                loader.setOwner(s, owner);
+            }
         }
 
-        loader.setPrivileges(s, res.getString("nspacl"), null);
+        if (includePrivileges) {
+            loader.setPrivileges(s, res.getString("nspacl"), null);
+        }
         loader.setAuthor(s, res);
         loader.putSchema(res.getLong("oid"), s);
 
@@ -82,10 +89,12 @@ public class PgSchemasReader extends PgAbstractJdbcReader {
 
         builder
                 .column("res.oid")
-                .column("res.nspname")
-                .column("res.nspacl")
-                .column("res.nspowner")
-                .from("pg_catalog.pg_namespace res")
+                .column("res.nspname");
+        if (includePrivileges) {
+            builder.column("res.nspacl")
+                    .column("res.nspowner");
+        }
+        builder.from("pg_catalog.pg_namespace res")
                 .where("res.nspname NOT LIKE 'pg\\_%'")
                 .where("res.nspname != 'information_schema'");
     }

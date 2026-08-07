@@ -59,6 +59,8 @@ public class PgJdbcType {
     private final String parentSchema;
     private final boolean isArrayType;
     private final long lastSysOid;
+    private final String storage;
+    private final long collation;
 
     /**
      * Creates a new JDBC type representation.
@@ -72,14 +74,18 @@ public class PgJdbcType {
      * @param parentSchema the schema containing this type
      * @param elemname the element type name for arrays
      * @param lastSysOid the last system OID for dependency checking
+     * @param storage the type's raw {@code typstorage} value
+     * @param collation the type's raw {@code typcollation} OID
      */
     public PgJdbcType(long oid, String typeName, long typelem, long typarray, String parentSchema,
-                      String elemname, long lastSysOid) {
+                      String elemname, long lastSysOid, String storage, long collation) {
         this.oid = oid;
         this.parentSchema = parentSchema;
         this.isArrayType = typarray == 0L && typelem != 0L;
         this.typeName = isArrayType ? elemname : typeName;
         this.lastSysOid = lastSysOid;
+        this.storage = storage;
+        this.collation = collation;
     }
 
     /**
@@ -130,6 +136,14 @@ public class PgJdbcType {
      */
     public String getFullName() {
         return getFullName("");
+    }
+
+    public String getStorage() {
+        return storage;
+    }
+
+    public long getCollation() {
+        return collation;
     }
 
     /**

@@ -30,6 +30,8 @@ import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
  */
 public final class PgOperatorsReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Creates a new PgOperatorsReader.
      *
@@ -37,6 +39,7 @@ public final class PgOperatorsReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgOperatorsReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -46,7 +49,9 @@ public final class PgOperatorsReader extends PgAbstractSearchPathJdbcReader {
         loader.setCurrentObject(new ObjectReference(operSchemaName, operName, DbObjType.OPERATOR));
         PgOperator oper = new PgOperator(operName);
 
-        loader.setOwner(oper, res.getLong("owner"));
+        if (includePrivileges) {
+            loader.setOwner(oper, res.getLong("owner"));
+        }
         loader.setComment(oper, res);
 
         long leftArgType = res.getLong("leftArg");
@@ -149,8 +154,13 @@ public final class PgOperatorsReader extends PgAbstractSearchPathJdbcReader {
                 .column("prc_r.proname AS restrict")
                 .column("prc_r_n.nspname AS restrict_nsp")
                 .column("prc_j.proname AS join")
-                .column("prc_j_n.nspname AS join_nsp")
-                .column("res.oprowner AS owner")
+                .column("prc_j_n.nspname AS join_nsp");
+
+        if (includePrivileges) {
+            builder.column("res.oprowner AS owner");
+        }
+
+        builder
                 .from("pg_catalog.pg_operator res")
                 .join("JOIN pg_catalog.pg_proc prc ON res.oprcode = prc.oid")
                 .join("LEFT JOIN pg_catalog.pg_namespace prc_n ON prc.pronamespace = prc_n.oid")

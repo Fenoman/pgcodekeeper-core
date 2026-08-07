@@ -151,6 +151,23 @@ public final class SQLScript {
     }
 
     /**
+     * Merges all statements from another SQL script into one execution phase.
+     * Source phase order and statement insertion order are preserved, while
+     * existing separators are copied byte-for-byte.
+     *
+     * @param script     script whose statements are copied
+     * @param actionType target execution phase for every copied statement
+     */
+    public void addAllStatements(SQLScript script, SQLActionType actionType) {
+        for (var type : SQLActionType.values()) {
+            Set<String> s = script.statements.get(type);
+            if (s != null) {
+                s.forEach(e -> addStatement(e, actionType, false));
+            }
+        }
+    }
+
+    /**
      * Generates the complete SQL script with all statements in execution order.
      * Statements are ordered by phases: PRE, BEGIN, MID, END, POST.
      *

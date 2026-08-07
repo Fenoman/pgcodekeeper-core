@@ -58,10 +58,33 @@ public class AntlrError extends ContextLocation {
      */
     public AntlrError(Token tokenError, String location, int line, int charPositionInLine, String msg, ErrorTypes errorType) {
         this(location, line, charPositionInLine, msg,
-                (tokenError == null ? -1 : ((CodeUnitToken) tokenError).getCodeUnitStart()),
-                (tokenError == null ? -1 : ((CodeUnitToken) tokenError).getCodeUnitStop()),
+                getTokenStart(tokenError),
+                getTokenStop(tokenError),
                 (tokenError == null ? null : tokenError.getText()),
                 errorType);
+    }
+
+    /**
+     * Returns the start offset of the token. Lexers of small service grammars
+     * (IgnoreList, DependenciesList) emit plain tokens without code unit info,
+     * for them the char-based start index is used as a fallback.
+     */
+    private static int getTokenStart(Token token) {
+        if (token instanceof CodeUnitToken codeUnitToken) {
+            return codeUnitToken.getCodeUnitStart();
+        }
+        return token == null ? -1 : token.getStartIndex();
+    }
+
+    /**
+     * Returns the stop offset of the token, see {@link #getTokenStart(Token)}
+     * for the fallback rules.
+     */
+    private static int getTokenStop(Token token) {
+        if (token instanceof CodeUnitToken codeUnitToken) {
+            return codeUnitToken.getCodeUnitStop();
+        }
+        return token == null ? -1 : token.getStopIndex();
     }
 
     private AntlrError(String location, int line, int charPositionInLine, String msg,

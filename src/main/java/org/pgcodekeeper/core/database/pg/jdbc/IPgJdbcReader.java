@@ -109,7 +109,14 @@ public interface IPgJdbcReader {
     }
 
     default QueryBuilder getExtensionCte() {
-        return EXTENSION_DEPS_CTE_BUILDER.copy().where("deptype = 'e'");
+        // DEPENDENCY_EXTENSION ('e') rows always reference the owning
+        // pg_extension row, so the reference-side predicate cannot change the
+        // result set; it only lets the planner use the small
+        // pg_depend_reference_index prefix instead of scanning every
+        // dependency entry of this object class
+        return EXTENSION_DEPS_CTE_BUILDER.copy()
+                .where("refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass")
+                .where("deptype = 'e'");
     }
 
     default void addDescriptionPart(QueryBuilder builder) {

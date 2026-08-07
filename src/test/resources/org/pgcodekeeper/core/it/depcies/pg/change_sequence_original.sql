@@ -47,10 +47,14 @@ CREATE TABLE public.t1 (
     c2 text
 );
 
+ALTER TABLE public.t1 OWNER TO owner;
+
 CREATE TABLE public.t2 (
     c1 integer DEFAULT nextval('public.s2'::regclass) NOT NULL,
     c2 text
 );
+
+ALTER TABLE public.t2 OWNER TO owner;
 
 CREATE TABLE public.t3 (
     c1 integer DEFAULT nextval('public.s3'::regclass) NOT NULL,
@@ -62,6 +66,8 @@ CREATE TABLE public.t4 (
     c2 text
 );
 
+ALTER TABLE public.t4 OWNER TO owner;
+
 CREATE TABLE public.t5 (
     c1 integer DEFAULT nextval('public.s5'::regclass) NOT NULL,
     c2 text
@@ -71,3 +77,5 @@ CREATE TABLE public.t6 (
     c1 integer DEFAULT nextval('public.s6'::regclass) NOT NULL,
     c2 text
 );
+
+ALTER TABLE public.t6 OWNER TO owner;

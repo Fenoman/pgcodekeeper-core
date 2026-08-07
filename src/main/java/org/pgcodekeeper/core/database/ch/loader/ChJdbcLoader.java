@@ -57,12 +57,14 @@ public final class ChJdbcLoader extends AbstractJdbcLoader<ChDatabase> {
     }
 
     @Override
-    public void preLoad() {
+    public void preLoad() throws InterruptedException {
+        checkCatalogReaderCancellation();
         if (isPreloaded) {
+            checkCatalogReaderCancellation();
             return;
         }
         settings.setVersion(ChSupportedVersion.DEFAULT);
-        isPreloaded = true;
+        publishPreloaded();
     }
 
     @Override
@@ -71,10 +73,21 @@ public final class ChJdbcLoader extends AbstractJdbcLoader<ChDatabase> {
 
         LOG.info(Messages.JdbcLoader_log_reading_db_jdbc);
         setCurrentOperation(Messages.JdbcChLoader_log_connection_db);
-        try (Connection connection = connector.getConnection();
-             Statement statement = connection.createStatement()) {
-            this.connection = connection;
-            this.statement = statement;
+        Connection ownedConnection = null;
+        Statement ownedStatement = null;
+        Throwable failure = null;
+        try {
+            checkCatalogReaderCancellation();
+            ownedConnection = connector.getConnection();
+            registerActiveConnection(ownedConnection);
+            this.connection = ownedConnection;
+            checkCatalogReaderCancellation();
+
+            ownedStatement = ownedConnection.createStatement();
+            registerActiveStatement(ownedStatement);
+            this.statement = ownedStatement;
+            configureOwnedCatalogStatement(ownedStatement);
+            checkCatalogReaderCancellation();
 
             LOG.info(Messages.JdbcLoader_log_read_db_objects);
             new ChSchemasReader(this, d).read();
@@ -89,15 +102,13 @@ public final class ChJdbcLoader extends AbstractJdbcLoader<ChDatabase> {
 
             IMonitor.checkCancelled(getMonitor());
             finishLoaders();
-
-            LOG.info(Messages.JdbcLoader_log_succes_queried);
-        } catch (InterruptedException ex) {
-            throw ex;
-        } catch (Exception e) {
-            // connection is closed at this point
-            throw new IOException(Messages.Connection_DatabaseJdbcAccessError.formatted(getCurrentLocation(),
-                    e.getLocalizedMessage()), e);
+        } catch (Exception | Error ex) {
+            failure = ex;
         }
+
+        failure = finishOwnedJdbcResources(ownedConnection, ownedStatement, failure);
+        throwOwnedJdbcFailure(failure);
+        LOG.info(Messages.JdbcLoader_log_succes_queried);
         return d;
     }
 

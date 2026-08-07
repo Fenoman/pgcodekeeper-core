@@ -31,6 +31,7 @@ import org.pgcodekeeper.core.utils.Utils;
 public final class PgServersReader extends PgAbstractJdbcReader {
 
     private final PgDatabase db;
+    private final boolean includePrivileges;
 
     /**
      * Creates a new PgServersReader.
@@ -41,6 +42,7 @@ public final class PgServersReader extends PgAbstractJdbcReader {
     public PgServersReader(PgJdbcLoader loader, PgDatabase db) {
         super(loader);
         this.db = db;
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -65,8 +67,10 @@ public final class PgServersReader extends PgAbstractJdbcReader {
             PgParserAbstract.fillOptionParams(options, srv::addOption, false, true, false);
         }
         loader.setComment(srv, res);
-        loader.setOwner(srv, res.getLong("srvowner"));
-        loader.setPrivileges(srv, res.getString("srvacl"), null);
+        if (includePrivileges) {
+            loader.setOwner(srv, res.getLong("srvowner"));
+            loader.setPrivileges(srv, res.getString("srvacl"), null);
+        }
         loader.setAuthor(srv, res);
         db.addChild(srv);
     }
@@ -84,10 +88,15 @@ public final class PgServersReader extends PgAbstractJdbcReader {
         builder
                 .column("res.srvname")
                 .column("res.srvtype")
-                .column("res.srvversion")
-                .column("res.srvacl")
-                .column("res.srvoptions")
-                .column("res.srvowner")
+                .column("res.srvversion");
+        if (includePrivileges) {
+            builder.column("res.srvacl");
+        }
+        builder.column("res.srvoptions");
+        if (includePrivileges) {
+            builder.column("res.srvowner");
+        }
+        builder
                 .column("fdw.fdwname")
                 .from("pg_catalog.pg_foreign_server res")
                 .join("LEFT JOIN pg_catalog.pg_foreign_data_wrapper fdw ON res.srvfdw = fdw.oid");

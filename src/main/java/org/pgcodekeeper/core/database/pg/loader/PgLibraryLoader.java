@@ -18,11 +18,13 @@ package org.pgcodekeeper.core.database.pg.loader;
 import org.pgcodekeeper.core.Consts;
 import org.pgcodekeeper.core.database.api.jdbc.IJdbcConnector;
 import org.pgcodekeeper.core.database.base.loader.AbstractLibraryLoader;
+import org.pgcodekeeper.core.database.base.parser.AntlrTask;
 import org.pgcodekeeper.core.database.pg.jdbc.PgJdbcConnector;
 import org.pgcodekeeper.core.database.pg.schema.PgDatabase;
 import org.pgcodekeeper.core.settings.ISettings;
 
 import java.nio.file.Path;
+import java.util.Queue;
 import java.util.Set;
 
 public class PgLibraryLoader extends AbstractLibraryLoader<PgDatabase> {
@@ -32,9 +34,15 @@ public class PgLibraryLoader extends AbstractLibraryLoader<PgDatabase> {
         super(database, metaPath, loadedPaths, settings);
     }
 
+    protected PgLibraryLoader(PgDatabase database, Path metaPath,
+                    Set<String> loadedPaths, ISettings settings,
+                    Queue<AntlrTask<?>> inheritedTasks) {
+        super(database, metaPath, loadedPaths, settings, inheritedTasks);
+    }
+
     @Override
     protected PgDatabase createDatabase() {
-        return new PgDatabase();
+        return new PgDatabase(settings.isCollectObjectReferences());
     }
 
     @Override
@@ -55,6 +63,7 @@ public class PgLibraryLoader extends AbstractLibraryLoader<PgDatabase> {
 
     @Override
     protected PgLibraryLoader getCopy(PgDatabase db) {
-        return new PgLibraryLoader(db, metaPath, loadedPaths, settings);
+        return new PgLibraryLoader(
+                db, metaPath, loadedPaths, settings, antlrTasks);
     }
 }

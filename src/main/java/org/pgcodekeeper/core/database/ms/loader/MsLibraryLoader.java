@@ -17,11 +17,13 @@ package org.pgcodekeeper.core.database.ms.loader;
 
 import org.pgcodekeeper.core.database.api.jdbc.IJdbcConnector;
 import org.pgcodekeeper.core.database.base.loader.AbstractLibraryLoader;
+import org.pgcodekeeper.core.database.base.parser.AntlrTask;
 import org.pgcodekeeper.core.database.ms.jdbc.MsJdbcConnector;
 import org.pgcodekeeper.core.database.ms.schema.MsDatabase;
 import org.pgcodekeeper.core.settings.ISettings;
 
 import java.nio.file.Path;
+import java.util.Queue;
 import java.util.Set;
 
 public class MsLibraryLoader extends AbstractLibraryLoader<MsDatabase> {
@@ -29,6 +31,11 @@ public class MsLibraryLoader extends AbstractLibraryLoader<MsDatabase> {
     public MsLibraryLoader(MsDatabase database, Path metaPath, Set<String> loadedPaths,
                            ISettings settings) {
         super(database, metaPath, loadedPaths, settings);
+    }
+
+    MsLibraryLoader(MsDatabase database, Path metaPath, Set<String> loadedPaths,
+                    ISettings settings, Queue<AntlrTask<?>> inheritedTasks) {
+        super(database, metaPath, loadedPaths, settings, inheritedTasks);
     }
 
     @Override
@@ -54,6 +61,7 @@ public class MsLibraryLoader extends AbstractLibraryLoader<MsDatabase> {
 
     @Override
     protected MsLibraryLoader getCopy(MsDatabase db) {
-        return new MsLibraryLoader(db, metaPath, loadedPaths, settings);
+        return new MsLibraryLoader(
+                db, metaPath, loadedPaths, settings, antlrTasks);
     }
 }

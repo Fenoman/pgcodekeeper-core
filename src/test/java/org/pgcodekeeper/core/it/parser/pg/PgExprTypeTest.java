@@ -19,6 +19,8 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.it.parser.pg;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.pgcodekeeper.core.FILES_POSTFIX;
@@ -65,6 +67,10 @@ class PgExprTypeTest {
             "check_anytype_resolution",
             // Check by named notation type
             "check_named_notation",
+            // Check columns of alias-less FROM subqueries (PostgreSQL 16+)
+            "check_unnamed_subquery_cols",
+            // Check ROWS FROM signatures with and without an explicit alias.
+            "check_rows_from_cols",
     })
     void runCheck(String fileNameTemplate) throws IOException, InterruptedException {
         var settings = new CoreSettings();
@@ -129,7 +135,10 @@ class PgExprTypeTest {
                 cols.append("\n\n  View: ").append(rel.getName());
                 cols.append("\n    RelationColumns : ");
 
-                for (Pair<String, String> col : Utils.streamIterator(rel.getRelationColumns())) {
+                var relationColumns = rel.getRelationColumns();
+                assertNotNull(relationColumns,
+                        () -> "No analyzed columns for view " + rel.getQualifiedName());
+                for (Pair<String, String> col : Utils.streamIterator(relationColumns)) {
                     cols.append("\n     ").append(col.getFirst()).append(" - ").append(col.getSecond());
                 }
             }

@@ -45,8 +45,25 @@ public final class PgJdbcUtils {
     public static <T> T[] getColArray(ResultSet rs, String columnName, boolean isAllowedNull) throws SQLException {
         Array arr = rs.getArray(columnName);
         if (arr != null) {
-            @SuppressWarnings("unchecked")
-            T[] ret = (T[]) arr.getArray();
+            T[] ret = null;
+            Throwable failure = null;
+            try {
+                @SuppressWarnings("unchecked")
+                T[] decoded = (T[]) arr.getArray();
+                ret = decoded;
+            } catch (SQLException | RuntimeException | Error ex) {
+                failure = ex;
+            }
+
+            try {
+                // PostgreSQL's PgArray retains its connection and encoded/decoded
+                // representations until free() releases them.
+                arr.free();
+            } catch (SQLException | RuntimeException | Error ex) {
+                failure = addFailure(failure, ex);
+            }
+
+            rethrowFailure(failure);
             return ret;
         }
 
@@ -55,5 +72,33 @@ public final class PgJdbcUtils {
         }
         String callerClassName = Thread.currentThread().getStackTrace()[2].getFileName();
         throw new IllegalArgumentException(Messages.JdbcReader_column_null_value_error_message.formatted(columnName, callerClassName));
+    }
+
+    private static Throwable addFailure(Throwable primary, Throwable secondary) {
+        if (primary == null) {
+            return secondary;
+        }
+        if (primary == secondary) {
+            return primary;
+        }
+        for (Throwable suppressed : primary.getSuppressed()) {
+            if (suppressed == secondary) {
+                return primary;
+            }
+        }
+        primary.addSuppressed(secondary);
+        return primary;
+    }
+
+    private static void rethrowFailure(Throwable failure) throws SQLException {
+        if (failure instanceof SQLException sql) {
+            throw sql;
+        }
+        if (failure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
     }
 }

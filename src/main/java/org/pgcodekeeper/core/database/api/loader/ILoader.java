@@ -16,6 +16,7 @@
 package org.pgcodekeeper.core.database.api.loader;
 
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
+import org.pgcodekeeper.core.database.api.schema.meta.IMetaContainer;
 import org.pgcodekeeper.core.settings.ISettings;
 
 import java.io.IOException;
@@ -24,7 +25,7 @@ import java.util.List;
 /**
  * Interface for database loader
  */
-public interface ILoader {
+public interface ILoader extends AutoCloseable {
 
     /**
      * Loads the database schema.
@@ -39,11 +40,67 @@ public interface ILoader {
     default void preLoad() throws IOException, InterruptedException {}
 
     /**
+     * Registers optional operation-local endpoints used only when this loader
+     * participates in the coordinated factory comparison API. The supplied
+     * facade is permanently bound to this loader's logical side and is sealed
+     * when this method returns. Ordinary loaders inherit the compatibility
+     * no-op.
+     *
+     * @param context side-bound extension registration facade
+     */
+    default void registerComparisonExtensions(ComparisonExtensionContext context)
+            throws IOException, InterruptedException {
+        // compatibility no-op
+    }
+
+    /**
+     * Requests best-effort cancellation of active work owned directly by this
+     * loader. Returning from this method does not by itself guarantee that all
+     * delegated work has terminated. Implementations that do not support
+     * external cancellation retain the compatibility no-op.
+     *
+     * @throws IOException if requesting cancellation fails
+     */
+    default void cancel() throws IOException {
+        // compatibility no-op
+    }
+
+    /**
+     * Releases resources owned by this loader after its active load has
+     * terminated. Callers must not close a loader concurrently with
+     * {@link #load()} or {@link #loadAndAnalyze()}; request cancellation and join
+     * the owner first. A loader may also be closed immediately after construction,
+     * before {@link #preLoad()} or {@link #load()}, when factory validation rejects
+     * an unpublished product. Implementations that do not retain closeable state
+     * inherit the compatibility no-op.
+     *
+     * @throws IOException if resource cleanup fails
+     */
+    @Override
+    default void close() throws IOException {
+        // compatibility no-op
+    }
+
+    /**
      * Loads the database schema and runs full expression analysis.
      *
      * @return loaded and fully analyzed database
      */
     IDatabase loadAndAnalyze() throws IOException, InterruptedException;
+
+    /**
+     * Loads the database schema and analyzes it against an external metadata
+     * context. Implementations that cannot preserve this context reject the
+     * operation explicitly so callers can safely fall back to a full load.
+     *
+     * @param metadata external metadata context
+     * @return loaded and fully analyzed database
+     */
+    default IDatabase loadAndAnalyze(IMetaContainer metadata)
+            throws IOException, InterruptedException {
+        throw new UnsupportedOperationException(
+                "External metadata analysis is not supported");
+    }
 
     /**
      * @return previously loaded database, or null if {@link #load()} has not been called

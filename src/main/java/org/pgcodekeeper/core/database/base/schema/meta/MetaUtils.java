@@ -22,7 +22,9 @@ import org.pgcodekeeper.core.database.api.jdbc.ISupportedVersion;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation.LocationType;
 import org.pgcodekeeper.core.database.api.schema.meta.IMetaContainer;
+import org.pgcodekeeper.core.monitor.IMonitor;
 import org.pgcodekeeper.core.utils.Pair;
+import org.pgcodekeeper.core.utils.PhaseTimer;
 
 /**
  * Utility class for creating and managing database metadata objects.
@@ -30,6 +32,8 @@ import org.pgcodekeeper.core.utils.Pair;
  * and organizing them into metadata containers.
  */
 public final class MetaUtils {
+
+    private static final int MATERIALIZATION_CHECK_MASK = 0xFF;
 
     /**
      * Creates a metadata container from a database object.
@@ -39,6 +43,7 @@ public final class MetaUtils {
      * @return the metadata container with all database objects
      */
     public static MetaContainer createTreeFromDb(IDatabase db, ISupportedVersion version) {
+        long start = PhaseTimer.start();
         MetaContainer tree = new MetaContainer();
         db.getDescendants()
                 .map(MetaUtils::createMetaFromStatement)
@@ -47,7 +52,149 @@ public final class MetaUtils {
         var v = version == null ? db.getVersion() : version;
         MetaStorage.getSystemObjects(v).forEach(tree::addStatement);
 
+        PhaseTimer.end("create_tree_from_db", start);
         return tree;
+    }
+
+    /**
+     * Creates a metadata container while observing an operation monitor.
+     *
+     * @param db      the database object
+     * @param version version of database
+     * @param monitor operation monitor
+     * @return the metadata container with all database objects
+     * @throws InterruptedException if materialization is cancelled
+     */
+    public static MetaContainer createTreeFromDb(
+            IDatabase db, ISupportedVersion version, IMonitor monitor)
+            throws InterruptedException {
+        long start = PhaseTimer.start();
+        MetaContainer tree = new MetaContainer();
+        var cancellation = new MaterializationCancellation(monitor);
+        cancellation.checkNow();
+
+        try (Stream<? extends IStatement> descendants = db.getDescendants()) {
+            Iterator<? extends IStatement> iterator = descendants.iterator();
+            while (iterator.hasNext()) {
+                tree.addStatement(createMetaFromStatement(iterator.next(), cancellation));
+                cancellation.itemMaterialized();
+            }
+        }
+
+        var v = version == null ? db.getVersion() : version;
+        for (MetaStatement systemObject : MetaStorage.getSystemObjects(v)) {
+            tree.addStatement(systemObject);
+            cancellation.itemMaterialized();
+        }
+        cancellation.checkNow();
+        PhaseTimer.end("create_tree_from_db", start, "items=" + cancellation.materializedItems);
+        return tree;
+    }
+
+    private static MetaStatement createMetaFromStatement(
+            IStatement st, MaterializationCancellation cancellation)
+            throws InterruptedException {
+        DbObjType type = st.getStatementType();
+        ObjectLocation loc = getLocation(st, type);
+        var meta = createMeta(st, loc, cancellation);
+
+        String comment = st.getComment();
+        if (comment != null) {
+            meta.setComment(comment);
+        }
+
+        return meta;
+    }
+
+    private static MetaStatement createMeta(
+            IStatement st, ObjectLocation loc,
+            MaterializationCancellation cancellation)
+            throws InterruptedException {
+        if (st instanceof ICast cast) {
+            return new MetaCast(cast.getSource(), cast.getTarget(), cast.getContext(), loc);
+        }
+
+        if (st instanceof IOperator op) {
+            MetaOperator oper = new MetaOperator(loc);
+            oper.setLeftArg(op.getLeftArg());
+            oper.setRightArg(op.getRightArg());
+            oper.setReturns(op.getReturns());
+            return oper;
+        }
+
+        if (st instanceof IFunction function) {
+            MetaFunction func = new MetaFunction(loc, st.getBareName());
+            for (Map.Entry<String, String> column
+                    : function.getReturnsColumns().entrySet()) {
+                func.addReturnsColumn(column.getKey(), column.getValue());
+                cancellation.itemMaterialized();
+            }
+            for (IArgument argument : function.getArguments()) {
+                func.addArgument(argument);
+                cancellation.itemMaterialized();
+            }
+            func.setReturns(function.getReturns());
+            return func;
+        }
+
+        if (st instanceof IConstraintPk constraint) {
+            MetaConstraint metaConstraint = new MetaConstraint(loc);
+            metaConstraint.setPrimaryKey(constraint.isPrimaryKey());
+            for (String column : constraint.getColumns()) {
+                metaConstraint.addColumn(column);
+                cancellation.itemMaterialized();
+            }
+            return metaConstraint;
+        }
+
+        if (st instanceof IRelation relation) {
+            MetaRelation metaRelation = new MetaRelation(loc);
+            Stream<Pair<String, String>> columns = relation.getRelationColumns();
+            if (columns != null) {
+                metaRelation.addColumns(Collections.emptyList());
+                try (columns) {
+                    Iterator<Pair<String, String>> iterator = columns.iterator();
+                    while (iterator.hasNext()) {
+                        metaRelation.addColumn(iterator.next());
+                        cancellation.itemMaterialized();
+                    }
+                }
+            }
+            return metaRelation;
+        }
+
+        if (st instanceof ICompositeType type) {
+            MetaCompositeType composite = new MetaCompositeType(loc);
+            for (Pair<String, String> attr : type.getAttrs()) {
+                composite.addAttr(attr.getFirst(), attr.getSecond());
+                cancellation.itemMaterialized();
+            }
+            return composite;
+        }
+        return new MetaStatement(loc);
+    }
+
+    private static final class MaterializationCancellation {
+
+        private final IMonitor monitor;
+        private int materializedItems;
+
+        private MaterializationCancellation(IMonitor monitor) {
+            this.monitor = monitor;
+        }
+
+        private void itemMaterialized() throws InterruptedException {
+            if ((++materializedItems & MATERIALIZATION_CHECK_MASK) == 0) {
+                checkNow();
+            }
+        }
+
+        private void checkNow() throws InterruptedException {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException();
+            }
+            IMonitor.checkCancelled(monitor);
+        }
     }
 
     private static MetaStatement createMetaFromStatement(IStatement st) {

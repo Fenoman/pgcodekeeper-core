@@ -43,4 +43,13 @@ public abstract class StatementCallable<T> implements Callable<T> {
     public void cancel() throws SQLException {
         st.cancel();
     }
+
+    /**
+     * Returns the statement owned by this callable.
+     *
+     * @return the exact statement passed to the constructor
+     */
+    public Statement getStatement() {
+        return st;
+    }
 }

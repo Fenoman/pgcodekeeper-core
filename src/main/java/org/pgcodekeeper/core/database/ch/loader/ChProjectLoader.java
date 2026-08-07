@@ -49,11 +49,12 @@ public class ChProjectLoader extends AbstractProjectLoader<ChDatabase> {
 
     @Override
     protected AbstractDumpLoader<ChDatabase> createDumpLoader(Path file) {
-        return new ChDumpLoader(file, settings);
+        return new ChDumpLoader(file, settings, antlrTasks);
     }
 
     @Override
     protected AbstractLibraryLoader<ChDatabase> createLibraryLoader(ChDatabase db) {
-        return new ChLibraryLoader(db, metaPath, new HashSet<>(), settings);
+        return new ChLibraryLoader(
+                db, metaPath, new HashSet<>(), settings, antlrTasks);
     }
 }

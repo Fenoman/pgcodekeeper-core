@@ -16,6 +16,7 @@
 package org.pgcodekeeper.core.database.pg.jdbc;
 
 import java.sql.SQLException;
+import java.util.Properties;
 
 import org.pgcodekeeper.core.database.base.jdbc.AbstractJdbcConnector;
 import org.postgresql.Driver;
@@ -46,6 +47,16 @@ public class PgJdbcConnector extends AbstractJdbcConnector {
         if (!Driver.isRegistered()) {
             Driver.register();
         }
+    }
+
+    @Override
+    protected Properties makeProperties() {
+        Properties props = super.makeProperties();
+        // lets pgJDBC send session parameters in the startup packet instead
+        // of issuing extra configuration queries after connect; all supported
+        // servers (PostgreSQL 14+, Greenplum 6 on the 9.4 core) satisfy this
+        props.setProperty("assumeMinServerVersion", "9.4");
+        return props;
     }
 
     @Override

@@ -113,6 +113,9 @@ Schema: public
      new_id - INT
      new_description - TEXT
      new_value - NUMERIC
+     id - INT
+     description - TEXT
+     value - NUMERIC
 
   View: test_record_view4
     RelationColumns : 
@@ -121,6 +124,9 @@ Schema: public
      new_id - INT
      new_description - TEXT
      new_value - NUMERIC
+     id - INT
+     description - TEXT
+     value - NUMERIC
 
   View: test_returning_type1
     RelationColumns : 

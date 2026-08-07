@@ -145,8 +145,11 @@ public class IgnoredObject {
      * @return a new IgnoredObject with the same properties but different name
      */
     public IgnoredObject copy(String name) {
+        var copiedObjTypes = objTypes.isEmpty()
+                ? EnumSet.noneOf(DbObjType.class)
+                : EnumSet.copyOf(objTypes);
         return new IgnoredObject(name, dbRegexStr, isShow, isRegular,
-                ignoreContent, isQualified, EnumSet.copyOf(objTypes));
+                ignoreContent, isQualified, copiedObjTypes);
     }
 
     public boolean match(String objName) {

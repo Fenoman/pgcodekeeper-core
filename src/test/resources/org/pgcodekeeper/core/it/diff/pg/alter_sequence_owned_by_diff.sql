@@ -11,5 +11,7 @@ CREATE TABLE public.t1 (
 	c2 text
 );
 
+ALTER TABLE public.t1 OWNER TO owner;
+
 ALTER SEQUENCE public.t1_c1_seq
 	OWNED BY public.t1.c1;

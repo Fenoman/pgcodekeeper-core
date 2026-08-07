@@ -1,0 +1,27 @@
+SHOW ALL
+HIDE REGEX,QUALIFIED 'temporary_(?!.*(metadata|report|security).*)'
+HIDE NONE 'system_metrics' type=VIEW
+HIDE NONE 'active_connections' type=VIEW
+HIDE NONE 'active_sessions' type=VIEW
+HIDE CONTENT,REGEX 'lookup_departments'
+HIDE CONTENT,REGEX 'lookup_regions'
+HIDE CONTENT,REGEX '.*' type=EXTENSION
+HIDE CONTENT,REGEX '.*' type=EVENT_TRIGGER
+HIDE REGEX '' type=SERVER
+HIDE REGEX 'application_log' type=TABLE
+HIDE NONE deny_mutation type=TRIGGER
+HIDE REGEX 'archived_.*' type=TABLE
+HIDE CONTENT integration type=SCHEMA
+HIDE CONTENT,REGEX 'external_.+' type=SCHEMA
+HIDE NONE audit_delete type=TRIGGER
+HIDE NONE audit_update type=TRIGGER
+HIDE NONE validate_update type=TRIGGER
+HIDE NONE validate_insert_update type=TRIGGER
+HIDE NONE audit_transaction type=TRIGGER
+HIDE NONE relay_update type=TRIGGER
+HIDE NONE relay_insert type=TRIGGER
+HIDE NONE relay_delete type=TRIGGER
+HIDE REGEX 'protect_generated_objects' type=EVENT_TRIGGER
+HIDE REGEX 'track_function_change' type=EVENT_TRIGGER
+HIDE REGEX 'track_function_drop' type=EVENT_TRIGGER
+HIDE REGEX 'control_replica_ddl' type=EVENT_TRIGGER

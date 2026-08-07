@@ -1,0 +1,2 @@
+SHOW ALL
+HIDE NONE some_table type=NOT_A_TYPE

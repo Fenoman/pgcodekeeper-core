@@ -106,7 +106,8 @@ public final class ChParserUtils {
                         parsedObjectName, errors);
                 parser.addParseListener(new CustomParseTreeListener(
                         monitoringLevel, mon == null ? new NullMonitor() : mon));
-                return new Pair<>((CommonTokenStream) parser.getInputStream(), parser.ch_file());
+                return new Pair<>((CommonTokenStream) parser.getInputStream(),
+                        TwoStageAntlrParse.parse(parser, CHParser::ch_file));
             } catch (MonitorCancelledRuntimeException mcre) {
                 throw new InterruptedException();
             }

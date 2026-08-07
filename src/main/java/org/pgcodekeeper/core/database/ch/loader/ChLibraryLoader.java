@@ -17,17 +17,24 @@ package org.pgcodekeeper.core.database.ch.loader;
 
 import org.pgcodekeeper.core.database.api.jdbc.IJdbcConnector;
 import org.pgcodekeeper.core.database.base.loader.AbstractLibraryLoader;
+import org.pgcodekeeper.core.database.base.parser.AntlrTask;
 import org.pgcodekeeper.core.database.ch.jdbc.ChJdbcConnector;
 import org.pgcodekeeper.core.database.ch.schema.ChDatabase;
 import org.pgcodekeeper.core.settings.ISettings;
 
 import java.nio.file.Path;
+import java.util.Queue;
 import java.util.Set;
 
 public class ChLibraryLoader extends AbstractLibraryLoader<ChDatabase> {
 
     public ChLibraryLoader(ChDatabase database, Path metaPath, Set<String> loadedPaths, ISettings settings) {
         super(database, metaPath, loadedPaths, settings);
+    }
+
+    ChLibraryLoader(ChDatabase database, Path metaPath, Set<String> loadedPaths,
+                    ISettings settings, Queue<AntlrTask<?>> inheritedTasks) {
+        super(database, metaPath, loadedPaths, settings, inheritedTasks);
     }
 
     @Override
@@ -53,6 +60,7 @@ public class ChLibraryLoader extends AbstractLibraryLoader<ChDatabase> {
 
     @Override
     protected ChLibraryLoader getCopy(ChDatabase db) {
-        return new ChLibraryLoader(db, metaPath, loadedPaths, settings);
+        return new ChLibraryLoader(
+                db, metaPath, loadedPaths, settings, antlrTasks);
     }
 }

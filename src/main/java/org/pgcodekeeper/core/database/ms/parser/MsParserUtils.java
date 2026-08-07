@@ -104,7 +104,8 @@ public final class MsParserUtils {
                 var parser = createSqlParser(stream, charsetName, parsedObjectName, errors);
                 parser.addParseListener(new CustomParseTreeListener(
                         monitoringLevel, mon == null ? new NullMonitor() : mon));
-                return new Pair<>((CommonTokenStream) parser.getInputStream(), parser.tsql_file());
+                return new Pair<>((CommonTokenStream) parser.getInputStream(),
+                        TwoStageAntlrParse.parse(parser, TSQLParser::tsql_file));
             } catch (MonitorCancelledRuntimeException mcre) {
                 throw new InterruptedException();
             }

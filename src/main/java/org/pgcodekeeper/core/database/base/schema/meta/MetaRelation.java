@@ -76,6 +76,13 @@ public final class MetaRelation extends MetaStatement implements IRelation {
         this.columns.addAll(columns);
     }
 
+    void addColumn(Pair<String, String> column) {
+        if (columns == null) {
+            columns = new ArrayList<>();
+        }
+        columns.add(column);
+    }
+
     /**
      * Returns the containing schema of this relation.
      * This operation is not supported for metadata relations.

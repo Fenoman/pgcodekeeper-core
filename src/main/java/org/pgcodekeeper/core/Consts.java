@@ -29,6 +29,15 @@ public final class Consts {
     public static final String UTC = "UTC";
 
     public static final String POOL_SIZE = "ru.taximaxim.codekeeper.parser.poolsize";
+    public static final String MAX_PENDING_TASKS = "ru.taximaxim.codekeeper.parser.maxpending";
+    public static final String MAX_PENDING_BYTES =
+            "ru.taximaxim.codekeeper.parser.maxpendingbytes";
+    public static final String BODY_CACHE_MAX_STATES =
+            "ru.taximaxim.codekeeper.parser.bodycache.maxstates";
+    public static final String BODY_CACHE_MAX_CONFIGS =
+            "ru.taximaxim.codekeeper.parser.bodycache.maxconfigs";
+    public static final String BODY_CACHE_MAX_CONTEXTS =
+            "ru.taximaxim.codekeeper.parser.bodycache.maxcontexts";
 
     public static final String FILENAME_WORKING_DIR_MARKER = ".pgcodekeeper";
     public static final String VERSION_PROP_NAME = "version";

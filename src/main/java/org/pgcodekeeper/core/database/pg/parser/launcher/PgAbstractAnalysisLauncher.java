@@ -35,6 +35,10 @@ public abstract class PgAbstractAnalysisLauncher extends AbstractAnalysisLaunche
         super(stmt, ctx, location);
     }
 
+    protected PgAbstractAnalysisLauncher(AbstractStatement stmt, String location) {
+        super(stmt, location);
+    }
+
     /**
      * Sets up namespace for Constraint/Index expr analysis
      *

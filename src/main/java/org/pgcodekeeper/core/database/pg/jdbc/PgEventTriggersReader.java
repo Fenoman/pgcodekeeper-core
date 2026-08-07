@@ -30,6 +30,7 @@ import org.pgcodekeeper.core.utils.Utils;
 public final class PgEventTriggersReader extends PgAbstractJdbcReader {
 
     private final PgDatabase db;
+    private final boolean includePrivileges;
 
     /**
      * Creates a new event triggers reader.
@@ -40,6 +41,7 @@ public final class PgEventTriggersReader extends PgAbstractJdbcReader {
     public PgEventTriggersReader(PgJdbcLoader loader, PgDatabase db) {
         super(loader);
         this.db = db;
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -74,7 +76,9 @@ public final class PgEventTriggersReader extends PgAbstractJdbcReader {
         evt.setExecutable(funcSchema + '.' + funcName + "()");
         evt.addDependency(new ObjectReference(funcSchema, funcName + "()", DbObjType.FUNCTION));
 
-        loader.setOwner(evt, res.getString("rolname"));
+        if (includePrivileges) {
+            loader.setOwner(evt, res.getString("rolname"));
+        }
         loader.setComment(evt, res);
         loader.setAuthor(evt, res);
         db.addChild(evt);
@@ -90,10 +94,15 @@ public final class PgEventTriggersReader extends PgAbstractJdbcReader {
                 .column("res.evtenabled")
                 .column("res.evttags")
                 .column("nsp.nspname")
-                .column("p.proname")
-                .column("o.rolname")
-                .from("pg_catalog.pg_event_trigger res")
-                .join("JOIN pg_catalog.pg_roles o ON o.oid = res.evtowner")
+                .column("p.proname");
+        if (includePrivileges) {
+            builder.column("o.rolname");
+        }
+        builder.from("pg_catalog.pg_event_trigger res");
+        if (includePrivileges) {
+            builder.join("JOIN pg_catalog.pg_roles o ON o.oid = res.evtowner");
+        }
+        builder
                 .join("JOIN pg_catalog.pg_proc p ON p.oid = res.evtfoid")
                 .join("JOIN pg_catalog.pg_namespace nsp ON p.pronamespace = nsp.oid");
     }

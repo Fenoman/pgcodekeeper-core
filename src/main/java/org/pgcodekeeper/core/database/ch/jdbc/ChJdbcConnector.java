@@ -47,16 +47,71 @@ public class ChJdbcConnector extends AbstractJdbcConnector {
 
     @Override
     public Connection getConnection() throws IOException {
-        var con = super.getConnection();
+        return validateConnection(super.getConnection());
+    }
+
+    static Connection validateConnection(Connection con) throws IOException {
         //FIXME when the connection() method of the clickhouse driver throws an exception
         // when trying to connect to a non-existent database.
-        try (var st = con.createStatement();
-             var rs = st.executeQuery("SELECT 1")) {
-            // check connection catch and throw exception if false
-        } catch (SQLException e) {
-            throw new IOException(e);
+        Statement statement = null;
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            statement = con.createStatement();
+            result = statement.executeQuery("SELECT 1");
+        } catch (SQLException | RuntimeException | Error ex) {
+            failure = ex;
         }
-        return con;
+
+        failure = closeResource(result, failure);
+        failure = closeResource(statement, failure);
+        if (failure == null) {
+            return con;
+        }
+
+        failure = closeResource(con, failure);
+        throw asIOExceptionOrRethrowUnchecked(failure);
+    }
+
+    private static Throwable closeResource(AutoCloseable resource, Throwable failure) {
+        if (resource == null) {
+            return failure;
+        }
+        try {
+            resource.close();
+        } catch (Exception | Error closeFailure) {
+            return mergeFailure(failure, closeFailure);
+        }
+        return failure;
+    }
+
+    private static Throwable mergeFailure(Throwable primary, Throwable failure) {
+        if (primary == null) {
+            return failure;
+        }
+        if (primary != failure && !isAlreadySuppressed(primary, failure)) {
+            primary.addSuppressed(failure);
+        }
+        return primary;
+    }
+
+    private static boolean isAlreadySuppressed(Throwable primary, Throwable failure) {
+        for (Throwable suppressed : primary.getSuppressed()) {
+            if (suppressed == failure) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static IOException asIOExceptionOrRethrowUnchecked(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        return new IOException(failure);
     }
 
     @Override

@@ -27,8 +27,8 @@ import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.base.script.AbstractScriptBuilder;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.model.difftree.TreeElement;
-import org.pgcodekeeper.core.model.graph.ActionContainer;
 import org.pgcodekeeper.core.model.graph.ActionsToScriptConverter;
+import org.pgcodekeeper.core.model.graph.DepcyResolver;
 import org.pgcodekeeper.core.script.SQLActionType;
 import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.ISettings;
@@ -41,7 +41,8 @@ public class PgScriptBuilder extends AbstractScriptBuilder {
     }
 
     @Override
-    protected String getScript(Set<ActionContainer> actions, Set<IStatement> toRefresh, List<TreeElement> selected,
+    protected String getScript(DepcyResolver.ResolvedActions resolved, Set<IStatement> toRefresh,
+                               List<TreeElement> selected,
                                IDatabase oldDb, IDatabase newDb)
             throws IOException {
         var settings = getSettings();
@@ -64,7 +65,7 @@ public class PgScriptBuilder extends AbstractScriptBuilder {
         }
 
         script.addStatement("SET search_path = pg_catalog", SQLActionType.BEGIN); //$NON-NLS-1$
-        ActionsToScriptConverter.fillScript(script, actions, toRefresh, oldDb, newDb, selected);
+        ActionsToScriptConverter.fillScript(script, resolved, toRefresh, oldDb, newDb, selected);
 
         if (settings.isAddTransaction()) {
             script.addStatement("COMMIT TRANSACTION", SQLActionType.END); //$NON-NLS-1$

@@ -70,6 +70,8 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
             .column("is_cycled")
             .build();
 
+    private final boolean includePrivileges;
+
     /**
      * Creates a new PgSequencesReader.
      *
@@ -77,6 +79,7 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgSequencesReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -113,7 +116,7 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
             s.setOwnedBy(new ObjectReference(schema.getName(), refTable, refColumn, DbObjType.COLUMN));
         }
 
-        if (identityType == null) {
+        if (identityType == null && includePrivileges) {
             loader.setOwner(s, res.getLong("relowner"));
             // PRIVILEGES
             loader.setPrivileges(s, res.getString("aclarray"), schema.getName());
@@ -146,29 +149,39 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
 
     public void querySequencesData(IDatabase db)
             throws SQLException, InterruptedException {
+        loader.checkCatalogReaderCancellation();
         loader.setCurrentOperation(Messages.PgSequencesReader_sequences_data_query);
+        IMonitor monitor = loader.getMonitor();
 
         List<String> schemasAccess = new ArrayList<>();
-        try (PreparedStatement schemasAccessQuery = loader.getConnection().prepareStatement(QUERY_SCHEMAS_ACCESS)) {
-            Array arrSchemas = loader.getConnection().createArrayOf("text",
-                    db.getSchemas().stream().filter(s -> !((PgSchema) s).getSequences().isEmpty()).map(ISchema::getName).toArray());
+        PreparedStatement schemasAccessQuery = null;
+        Array arrSchemas = null;
+        ResultSet schemaRes = null;
+        Throwable failure = null;
+        try {
+            schemasAccessQuery = loader.prepareCatalogStatement(QUERY_SCHEMAS_ACCESS);
+            loader.registerCatalogStatement(schemasAccessQuery);
+            arrSchemas = loader.getConnection().createArrayOf("text", db.getSchemas().stream()
+                    .filter(s -> !((PgSchema) s).getSequences().isEmpty())
+                    .map(ISchema::getName).toArray());
             schemasAccessQuery.setArray(1, arrSchemas);
-            try (ResultSet schemaRes = loader.getRunner().runScript(schemasAccessQuery)) {
-                while (schemaRes.next()) {
-                    String schema = schemaRes.getString("nspname");
-                    Object hasPriv = schemaRes.getObject("has_priv");
-                    IPgJdbcReader.checkObjectValidity(hasPriv, DbObjType.SCHEMA, schema);
+            schemaRes = loader.getRunner().runScript(schemasAccessQuery);
+            while (schemaRes.next()) {
+                IMonitor.checkCancelled(monitor);
+                String schema = schemaRes.getString("nspname");
+                Object hasPriv = schemaRes.getObject("has_priv");
+                IPgJdbcReader.checkObjectValidity(hasPriv, DbObjType.SCHEMA, schema);
 
-                    if ((boolean) hasPriv) {
-                        schemasAccess.add(schema);
-                    } else {
-                        loader.addError(Messages.PgSequencesReader_no_usage_privileges_for_schema.formatted(schema));
-                    }
+                if ((boolean) hasPriv) {
+                    schemasAccess.add(schema);
+                } else {
+                    loader.addError(Messages.PgSequencesReader_no_usage_privileges_for_schema.formatted(schema));
                 }
-            } finally {
-                arrSchemas.free();
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishPreparedRead(schemaRes, arrSchemas, schemasAccessQuery, failure);
 
         Map<String, PgSequence> seqs = new HashMap<>();
         for (String schema : schemasAccess) {
@@ -178,39 +191,51 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
         }
 
         StringBuilder sbUnionQuery = new StringBuilder();
-        try (PreparedStatement accessQuery = loader.getConnection().prepareStatement(QUERY_SEQUENCES_ACCESS)) {
-            Array arrSeqs = loader.getConnection().createArrayOf("text", seqs.keySet().toArray());
+        PreparedStatement accessQuery = null;
+        Array arrSeqs = null;
+        ResultSet accessRes = null;
+        failure = null;
+        try {
+            accessQuery = loader.prepareCatalogStatement(QUERY_SEQUENCES_ACCESS);
+            loader.registerCatalogStatement(accessQuery);
+            arrSeqs = loader.getConnection().createArrayOf("text", seqs.keySet().toArray());
             accessQuery.setArray(1, arrSeqs);
-            try (ResultSet res = loader.getRunner().runScript(accessQuery)) {
-                while (res.next()) {
-                    String qname = res.getString("qname");
-                    Object hasPriv = res.getObject("has_priv");
-                    IPgJdbcReader.checkObjectValidity(hasPriv, DbObjType.SEQUENCE, qname);
+            accessRes = loader.getRunner().runScript(accessQuery);
+            while (accessRes.next()) {
+                IMonitor.checkCancelled(monitor);
+                String qname = accessRes.getString("qname");
+                Object hasPriv = accessRes.getObject("has_priv");
+                IPgJdbcReader.checkObjectValidity(hasPriv, DbObjType.SEQUENCE, qname);
 
-                    if ((boolean) hasPriv) {
-                        if (!sbUnionQuery.isEmpty()) {
-                            sbUnionQuery.append("\nUNION ALL\n");
-                        }
-                        sbUnionQuery.append(QUERY_SEQUENCES_DATA)
-                                .append(',')
-                                .append(Utils.quoteString(qname))
-                                .append(" qname FROM ")
-                                .append(qname);
-                    } else {
-                        loader.addError(Messages.PgSequencesReader_no_select_privileges_for_sequence.formatted(qname));
+                if ((boolean) hasPriv) {
+                    if (!sbUnionQuery.isEmpty()) {
+                        sbUnionQuery.append("\nUNION ALL\n");
                     }
+                    sbUnionQuery.append(QUERY_SEQUENCES_DATA)
+                            .append(',')
+                            .append(Utils.quoteString(qname))
+                            .append(" qname FROM ")
+                            .append(qname);
+                } else {
+                    loader.addError(Messages.PgSequencesReader_no_select_privileges_for_sequence.formatted(qname));
                 }
-            } finally {
-                arrSeqs.free();
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishPreparedRead(accessRes, arrSeqs, accessQuery, failure);
+
+        loader.checkCatalogReaderCancellation();
         if (sbUnionQuery.isEmpty()) {
             return;
         }
 
-        try (ResultSet res = loader.getRunner().runScript(loader.getStatement(), sbUnionQuery.toString())) {
+        ResultSet res = null;
+        failure = null;
+        try {
+            res = loader.getRunner().runScript(loader.getStatement(), sbUnionQuery.toString());
             while (res.next()) {
-                IMonitor.checkCancelled(loader.getMonitor());
+                IMonitor.checkCancelled(monitor);
                 PgSequence seq = seqs.get(res.getString("qname"));
                 seq.setStartWith(res.getString("start_value"));
                 seq.setMinMaxInc(res.getLong("increment_by"), res.getLong("max_value"),
@@ -218,7 +243,114 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
                 seq.setCache(res.getString("cache_value"));
                 seq.setCycle(res.getBoolean("is_cycled"));
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishOwnerResult(res, failure);
+    }
+
+    /**
+     * Releases resources owned by one access query in cancellation-safe order. The JDBC array
+     * remains live until its result set is closed, and the statement remains published until
+     * both dependent resources are released. Identity-based merging avoids Java TWR
+     * self-suppression when a driver rethrows the same failure instance from several steps.
+     */
+    private void finishPreparedRead(ResultSet result, Array array,
+            PreparedStatement statement, Throwable failure)
+            throws SQLException, InterruptedException {
+        Throwable resultFailure = failure;
+        if (result != null) {
+            try {
+                result.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        if (array != null) {
+            try {
+                array.free();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        if (statement != null) {
+            try {
+                loader.clearCatalogStatement(statement);
+            } catch (RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+            try {
+                statement.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        finishCatalogOperation(resultFailure);
+    }
+
+    /**
+     * Closes only the result set produced by the loader-owned statement. The statement itself
+     * stays registered and is closed by the enclosing loader operation.
+     */
+    private void finishOwnerResult(ResultSet result, Throwable failure)
+            throws SQLException, InterruptedException {
+        Throwable resultFailure = failure;
+        if (result != null) {
+            try {
+                result.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        finishCatalogOperation(resultFailure);
+    }
+
+    private void finishCatalogOperation(Throwable failure)
+            throws SQLException, InterruptedException {
+        if (failure != null) {
+            InterruptedException cancellation = loader.classifyCatalogReaderCancellation(failure);
+            if (cancellation != null) {
+                throw cancellation;
+            }
+            rethrowCatalogFailure(failure);
+        }
+        loader.checkCatalogReaderCancellation();
+    }
+
+    private static Throwable addFailure(Throwable primary, Throwable secondary) {
+        if (secondary == null) {
+            return primary;
+        }
+        if (primary == null) {
+            return secondary;
+        }
+        if (primary == secondary) {
+            return primary;
+        }
+        for (Throwable suppressed : primary.getSuppressed()) {
+            if (suppressed == secondary) {
+                return primary;
+            }
+        }
+        primary.addSuppressed(secondary);
+        return primary;
+    }
+
+    private static void rethrowCatalogFailure(Throwable failure)
+            throws SQLException, InterruptedException {
+        if (failure instanceof SQLException sql) {
+            throw sql;
+        }
+        if (failure instanceof InterruptedException interrupted) {
+            throw interrupted;
+        }
+        if (failure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("Unexpected checked sequence reader failure", failure);
     }
 
     @Override
@@ -236,13 +368,18 @@ public final class PgSequencesReader extends PgAbstractSearchPathJdbcReader {
         addExtensionDepsCte(builder);
         addDescriptionPart(builder, true);
 
+        if (includePrivileges) {
+            builder.column("res.relowner::bigint");
+        }
         builder
-                .column("res.relowner::bigint")
                 .column("res.relname")
                 .column("res.relpersistence")
                 .column("(SELECT t.relname FROM pg_catalog.pg_class t WHERE t.oid=dep.refobjid) referenced_table_name")
-                .column("a.attname AS ref_col_name")
-                .column("res.relacl::text AS aclarray")
+                .column("a.attname AS ref_col_name");
+        if (includePrivileges) {
+            builder.column("res.relacl::text AS aclarray");
+        }
+        builder
                 .from("pg_catalog.pg_class res")
                 .join("LEFT JOIN pg_catalog.pg_depend dep ON dep.classid = res.tableoid AND dep.objid = res.oid AND dep.objsubid = 0"
                         + " AND dep.refclassid = res.tableoid AND dep.refobjsubid != 0 AND dep.deptype IN ('i', 'a')")

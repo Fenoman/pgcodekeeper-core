@@ -42,6 +42,8 @@ import java.util.Locale;
 
 abstract class AbstractPgGpJdbcLoaderTest extends JdbcLoaderTest {
 
+    protected static final String SHARED_PG_TEST_DATABASE = "testcontainer:PG:test";
+
     private final PgDatabaseProvider databaseProvider = new PgDatabaseProvider();
 
     protected void jdbcLoaderTest(boolean hasDiff, String fileName, String contTypeName, ISettings settings)

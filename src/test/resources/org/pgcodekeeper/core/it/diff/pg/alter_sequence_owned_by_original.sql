@@ -8,6 +8,8 @@ CREATE SEQUENCE public.t1_c1_seq
 	NO MINVALUE
 	CACHE 1;
 
+ALTER SEQUENCE public.t1_c1_seq OWNER TO owner;
+
 -- drop owned by
 
 CREATE SEQUENCE public.t2_c1_seq

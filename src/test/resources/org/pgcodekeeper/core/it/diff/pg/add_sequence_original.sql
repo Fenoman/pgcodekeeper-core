@@ -9,3 +9,5 @@ CREATE TABLE public.test (
     c1 integer,
     c2 text
 );
+
+ALTER TABLE public.test OWNER TO khazieva_gr;

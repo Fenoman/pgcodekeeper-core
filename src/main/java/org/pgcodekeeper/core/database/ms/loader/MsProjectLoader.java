@@ -56,19 +56,19 @@ public class MsProjectLoader extends AbstractProjectLoader<MsDatabase> {
 
     @Override
     protected AbstractDumpLoader<MsDatabase> createDumpLoader(Path file) {
-        return new MsDumpLoader(file, settings);
+        return new MsDumpLoader(file, settings, antlrTasks);
     }
 
     @Override
     protected AbstractLibraryLoader<MsDatabase> createLibraryLoader(MsDatabase db) {
-        return new MsLibraryLoader(db, metaPath, new HashSet<>(), settings);
+        return new MsLibraryLoader(
+                db, metaPath, new HashSet<>(), settings, antlrTasks);
     }
 
     @Override
     protected void afterSchemaLoad(MsDatabase db) throws InterruptedException, IOException {
         // DBO schema check requires schema loads to finish first
         AntlrTaskManager.finish(antlrTasks);
-        collectDumpLoaderErrors();
         addDboSchema(db);
     }
 
@@ -83,9 +83,5 @@ public class MsProjectLoader extends AbstractProjectLoader<MsDatabase> {
             db.addSchema(schema);
             db.setDefaultSchema(MsConsts.DEFAULT_SCHEMA);
         }
-    }
-
-    private void collectDumpLoaderErrors() {
-        dumpLoaders.clear();
     }
 }

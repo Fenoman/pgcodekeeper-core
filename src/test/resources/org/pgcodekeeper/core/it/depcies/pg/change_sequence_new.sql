@@ -45,6 +45,8 @@ CREATE SEQUENCE public.s4
     NO MINVALUE
     CACHE 1;
 
+ALTER SEQUENCE public.s4 OWNER TO owner;
+
 ALTER SEQUENCE public.s4
     OWNED BY public.t4.c1;
 
@@ -64,10 +66,14 @@ CREATE TABLE public.t1 (
     c2 text
 );
 
+ALTER TABLE public.t1 OWNER TO owner;
+
 CREATE TABLE public.t2 (
     c1 integer NOT NULL,
     c2 text
 );
+
+ALTER TABLE public.t2 OWNER TO owner;
 
 CREATE TABLE public.t3 (
     c1 integer NOT NULL,
@@ -79,8 +85,12 @@ CREATE TABLE public.t4 (
     c2 text
 );
 
+ALTER TABLE public.t4 OWNER TO owner;
+
 CREATE TABLE public.t6 (
     c2 text,
     c1 integer DEFAULT nextval('public.s6'::regclass) NOT NULL,
     c3 integer DEFAULT public.fff(1, 2)
 );
+
+ALTER TABLE public.t6 OWNER TO owner;

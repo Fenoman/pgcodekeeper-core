@@ -18,6 +18,7 @@ package org.pgcodekeeper.core.database.pg.parser.launcher;
 import java.util.Set;
 
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.pgcodekeeper.core.database.api.schema.IRelation;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation;
 import org.pgcodekeeper.core.database.api.schema.meta.IMetaContainer;
 import org.pgcodekeeper.core.database.base.parser.launcher.AbstractAnalysisLauncher;
@@ -54,8 +55,13 @@ public class PgViewAnalysisLauncher extends AbstractAnalysisLauncher {
     public Set<ObjectLocation> analyze(ParserRuleContext ctx, IMetaContainer meta) {
         PgSelect select = new PgSelect(meta);
         select.setFullAnalyze(fullAnalyze);
-        MetaUtils.initializeView(meta, getSchemaName(), stmt.getName(),
-                select.analyze((Select_stmtContext) ctx));
+        var columns = select.analyze((Select_stmtContext) ctx);
+        if (((IRelation) stmt).getRelationColumns() == null) {
+            // catalog-fed views already initialized their meta columns in
+            // createTreeFromDb; overwriting them here would race with other
+            // launchers running concurrently in the analysis pool
+            MetaUtils.initializeView(meta, getSchemaName(), stmt.getName(), columns);
+        }
         return select.getDependencies();
     }
 }

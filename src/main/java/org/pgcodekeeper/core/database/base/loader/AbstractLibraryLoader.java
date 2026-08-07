@@ -23,11 +23,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Stream;
 
 import org.pgcodekeeper.core.Consts;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
+import org.pgcodekeeper.core.database.base.parser.AntlrTask;
 import org.pgcodekeeper.core.library.Library;
 import org.pgcodekeeper.core.library.LibrarySource;
 import org.pgcodekeeper.core.library.LibraryXmlStore;
@@ -56,7 +58,13 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
 
     protected AbstractLibraryLoader(T database, Path metaPath, Set<String> loadedPaths,
                                     ISettings settings) {
-        super(settings, "");
+        this(database, metaPath, loadedPaths, settings, null);
+    }
+
+    protected AbstractLibraryLoader(T database, Path metaPath, Set<String> loadedPaths,
+                                    ISettings settings,
+                                    Queue<AntlrTask<?>> inheritedTasks) {
+        super(settings, "", inheritedTasks);
         this.database = database;
         this.metaPath = metaPath != null ? metaPath : META_PATH;
         this.loadedPaths = loadedPaths;
@@ -175,15 +183,19 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
 
         // project
         if (Files.exists(path.resolve(Consts.FILENAME_WORKING_DIR_MARKER))) {
-            var projectLoader = getProjectLoader(path, libSettings);
-            projectLoader.setLib(true);
-            T db = projectLoader.load();
+            try (var projectLoader = getProjectLoader(path, libSettings)) {
+                projectLoader.setLib(true);
+                T db = projectLoader.load();
 
-            if (loadNested) {
-                getCopy(db).loadXml(new LibraryXmlStore(path.resolve(LibraryXmlStore.FILE_NAME)));
+                if (loadNested) {
+                    try (var nestedLoader = getCopy(db)) {
+                        nestedLoader.loadXml(new LibraryXmlStore(
+                                path.resolve(LibraryXmlStore.FILE_NAME)));
+                    }
+                }
+
+                return db;
             }
-
-            return db;
         }
 
         // simple directory
@@ -203,7 +215,8 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
      * @return settings wrapped in LibSettings that ignores library-specific ignore lists
      */
     private ISettings getLibSettings(boolean isIgnorePrivileges) {
-        return new LibSettings(settings, settings.isIgnorePrivileges() || isIgnorePrivileges);
+        return new LibSettings(settings,
+                settings.isIgnorePrivileges() || isIgnorePrivileges, antlrTasks);
     }
 
     private T loadZip(Path path, boolean isIgnorePrivileges)
@@ -220,8 +233,9 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
      * @return loaded database
      */
     private T loadJdbc(String url, boolean isIgnorePrivileges) throws IOException, InterruptedException {
-        var loader = createJdbcLoader(url, getLibSettings(isIgnorePrivileges));
-        return loader.load();
+        try (var loader = createJdbcLoader(url, getLibSettings(isIgnorePrivileges))) {
+            return loader.load();
+        }
     }
 
     /**
@@ -232,8 +246,9 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
      * @return loaded database
      */
     private T loadDump(Path path, boolean isIgnorePrivileges) throws IOException, InterruptedException {
-        var loader = getDumpLoader(path, getLibSettings(isIgnorePrivileges));
-        return loader.load();
+        try (var loader = getDumpLoader(path, getLibSettings(isIgnorePrivileges))) {
+            return loader.load();
+        }
     }
 
     /**
@@ -282,8 +297,9 @@ public abstract class AbstractLibraryLoader<T extends IDatabase> extends Abstrac
         if (filePath.endsWith(".zip")) {
             db.addLib(getLibraryDependency(filePath, settings.isIgnorePrivileges()), null, null, settings.isIgnorePrivileges());
         } else if (filePath.endsWith(Consts.SQL_POSTFIX)) {
-            var loader = getDumpLoader(sub, settings);
-            loader.loadWithoutAnalyze(db, antlrTasks);
+            try (var loader = getDumpLoader(sub, settings)) {
+                loader.loadWithoutAnalyze(db, antlrTasks);
+            }
         }
     }
 

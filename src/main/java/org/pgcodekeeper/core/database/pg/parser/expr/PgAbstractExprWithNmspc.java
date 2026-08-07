@@ -37,6 +37,7 @@ import org.pgcodekeeper.core.utils.*;
 public abstract class PgAbstractExprWithNmspc<T extends ParserRuleContext> extends PgAbstractExpr {
 
     private static final String FUNC_ARGS_KEY = "\\_SPECIAL_CONTAINER_FOR_PRIMITIVE_VARS\\";
+    private static final String UNNAMED_SUBQUERY_KEY = "\\_SPECIAL_CONTAINER_FOR_UNNAMED_SUBQUERY_COLS\\";
 
     /**
      * The local namespace of this Select.<br>
@@ -265,6 +266,16 @@ public abstract class PgAbstractExprWithNmspc<T extends ParserRuleContext> exten
      */
     public void addNamespaceVariable(Pair<String, String> variable) {
         complexNamespace.computeIfAbsent(FUNC_ARGS_KEY, k -> new ArrayList<>()).add(variable);
+    }
+
+    /**
+     * Registers output columns of an alias-less FROM subquery
+     * (allowed since PostgreSQL 16) in a special complexNamespace container.
+     * Such a subquery cannot be referenced by name, but its output columns
+     * stay visible unqualified in the containing query.
+     */
+    protected void addUnnamedSubqueryColumns(List<? extends Pair<String, String>> columns) {
+        complexNamespace.computeIfAbsent(UNNAMED_SUBQUERY_KEY, k -> new ArrayList<>()).addAll(columns);
     }
 
     /**

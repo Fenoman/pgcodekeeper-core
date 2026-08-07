@@ -8,5 +8,7 @@ CREATE SEQUENCE public.s4
 	NO MINVALUE
 	CACHE 1;
 
+ALTER SEQUENCE public.s4 OWNER TO owner;
+
 ALTER SEQUENCE public.s4
 	OWNED BY public.t4.c1;

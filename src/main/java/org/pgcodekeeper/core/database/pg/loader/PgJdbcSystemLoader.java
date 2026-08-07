@@ -153,44 +153,71 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
      */
     public MetaStorage getStorageFromJdbc() throws IOException, InterruptedException {
         MetaStorage storage = new MetaStorage();
-        LOG.info(Messages.JdbcLoader_log_reading_db_jdbc);
-        setCurrentOperation(Messages.JdbcChLoader_log_connection_db);
-        try (Connection connection = connector.getConnection();
-             Statement statement = connection.createStatement()) {
-            this.connection = connection;
-            this.statement = statement;
-            connection.setAutoCommit(false);
-            getRunner().run(statement, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
-            getRunner().run(statement, "SET search_path TO pg_catalog;");
-            getRunner().run(statement, "SET timezone = " + Utils.quoteString(timezone));
+        Connection ownedConnection = null;
+        Statement ownedStatement = null;
+        Throwable failure = null;
+        try {
+            checkCatalogReaderCancellation();
+            LOG.info(Messages.JdbcLoader_log_reading_db_jdbc);
+            setCurrentOperation(Messages.JdbcChLoader_log_connection_db);
 
-            queryCheckGreenplumDb(statement);
-            queryCheckPgVersion(statement);
+            ownedConnection = connector.getConnection();
+            registerActiveConnection(ownedConnection);
+            this.connection = ownedConnection;
+            checkCatalogReaderCancellation();
+
+            ownedStatement = ownedConnection.createStatement();
+            registerActiveStatement(ownedStatement);
+            this.statement = ownedStatement;
+            configureOwnedCatalogStatement(ownedStatement);
+            checkCatalogReaderCancellation();
+
+            ownedConnection.setAutoCommit(false);
+            getRunner().run(ownedStatement, buildSessionSetupScript(timezone));
+
+            queryCheckServerVersion(ownedStatement);
+            checkCatalogReaderCancellation();
             queryCheckLastSysOid();
+            checkCatalogReaderCancellation();
             queryTypesForCache();
+            checkCatalogReaderCancellation();
 
             readRelations(storage);
             readFunctions(storage);
             readOperators(storage);
             readCasts(storage);
 
-            connection.commit();
+            checkCatalogReaderCancellation();
+            ownedConnection.commit();
+            checkCatalogReaderCancellation();
             finishLoaders();
-            LOG.info(Messages.JdbcLoader_log_succes_queried);
-        } catch (InterruptedException ex) {
-            throw ex;
-        } catch (Exception e) {
-            // connection is closed at this point, trust Postgres to rollback it; we're a read-only xact anyway
-            throw new IOException(Messages.Connection_DatabaseJdbcAccessError.formatted(getCurrentLocation(),
-                    e.getLocalizedMessage()), e);
+            checkCatalogReaderCancellation();
+        } catch (Exception | Error ex) {
+            failure = ex;
         }
 
+        failure = finishOwnedJdbcResources(ownedConnection, ownedStatement, failure);
+        failure = exposeOwnedJdbcFailure(failure);
+        if (failure != null) {
+            abortTasks(failure);
+        }
+        try {
+            releaseLoadResources();
+        } catch (RuntimeException | Error ex) {
+            failure = addFailure(failure, ex);
+        }
+        rethrowSystemLoadFailure(failure);
+        LOG.info(Messages.JdbcLoader_log_succes_queried);
         return storage;
     }
 
     private void readFunctions(MetaStorage storage)
-            throws InterruptedException, SQLException {
-        try (ResultSet result = getStatement().executeQuery(QUERY_SYSTEM_FUNCTIONS)) {
+            throws IOException, InterruptedException, SQLException {
+        checkCatalogReaderCancellation();
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            result = getRunner().runScript(getStatement(), QUERY_SYSTEM_FUNCTIONS);
             while (result.next()) {
                 IMonitor.checkCancelled(getMonitor());
                 String functionName = result.getString(NAME);
@@ -236,8 +263,12 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
                 } else {
                     storage.addMetaChild(function);
                 }
+                tryFinishAntlrTask();
             }
+        } catch (IOException | SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishOwnerResult(result, failure);
     }
 
     private void fillArguments(Function_argsContext ctx, MetaFunction func) {
@@ -266,8 +297,12 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
     }
 
     private void readRelations(MetaStorage storage)
-            throws InterruptedException, SQLException {
-        try (ResultSet result = getStatement().executeQuery(QUERY_SYSTEM_RELATIONS)) {
+            throws IOException, InterruptedException, SQLException {
+        checkCatalogReaderCancellation();
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            result = getRunner().runScript(getStatement(), QUERY_SYSTEM_RELATIONS);
             while (result.next()) {
                 IMonitor.checkCancelled(getMonitor());
                 String schemaName = result.getString(NAMESPACE_NAME);
@@ -294,11 +329,18 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
 
                 storage.addMetaChild(relation);
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishOwnerResult(result, failure);
     }
 
-    private void readOperators(MetaStorage storage) throws InterruptedException, SQLException {
-        try (ResultSet result = getStatement().executeQuery(QUERY_SYSTEM_OPERATORS)) {
+    private void readOperators(MetaStorage storage) throws IOException, InterruptedException, SQLException {
+        checkCatalogReaderCancellation();
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            result = getRunner().runScript(getStatement(), QUERY_SYSTEM_OPERATORS);
             while (result.next()) {
                 IMonitor.checkCancelled(getMonitor());
                 String name = result.getString(NAME);
@@ -321,13 +363,23 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
 
                 storage.addMetaChild(operator);
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishOwnerResult(result, failure);
     }
 
-    private void readCasts(MetaStorage storage) throws InterruptedException, SQLException {
-        try (PreparedStatement statement = getConnection().prepareStatement(QUERY_SYSTEM_CASTS)) {
+    private void readCasts(MetaStorage storage) throws IOException, InterruptedException, SQLException {
+        checkCatalogReaderCancellation();
+        PreparedStatement statement = null;
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            statement = getConnection().prepareStatement(QUERY_SYSTEM_CASTS);
+            registerCatalogStatement(statement);
+            configureOwnedCatalogStatement(statement);
             statement.setLong(1, getLastSysOid());
-            ResultSet result = getRunner().runScript(statement);
+            result = getRunner().runScript(statement);
             while (result.next()) {
                 IMonitor.checkCancelled(getMonitor());
                 String source = result.getString("source");
@@ -344,7 +396,137 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
                 };
                 storage.addMetaChild(new MetaCast(source, target, ctx));
             }
+        } catch (SQLException | InterruptedException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        finishPreparedResult(result, statement, failure);
+    }
+
+    /**
+     * Closes only the result set produced by the loader-owned statement. The
+     * statement and its connection remain owned by the enclosing system load.
+     */
+    private void finishOwnerResult(ResultSet result, Throwable failure)
+            throws IOException, SQLException, InterruptedException {
+        Throwable resultFailure = failure;
+        if (result != null) {
+            try {
+                result.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        finishCatalogOperation(resultFailure);
+    }
+
+    /**
+     * Releases a reader-owned prepared statement after all dependent resources.
+     * Clearing the cancellation registration is a drain barrier and therefore
+     * precedes physical statement close.
+     */
+    private void finishPreparedResult(ResultSet result, PreparedStatement statement,
+            Throwable failure) throws IOException, SQLException, InterruptedException {
+        Throwable resultFailure = failure;
+        if (result != null) {
+            try {
+                result.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        if (statement != null) {
+            try {
+                clearCatalogStatement(statement);
+            } catch (RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+            try {
+                statement.close();
+            } catch (SQLException | RuntimeException | Error ex) {
+                resultFailure = addFailure(resultFailure, ex);
+            }
+        }
+        finishCatalogOperation(resultFailure);
+    }
+
+    private void finishCatalogOperation(Throwable failure)
+            throws IOException, SQLException, InterruptedException {
+        if (failure != null) {
+            InterruptedException cancellation = classifyCatalogReaderCancellation(failure);
+            if (cancellation != null) {
+                throw cancellation;
+            }
+            rethrowCatalogFailure(failure);
+        }
+        checkCatalogReaderCancellation();
+    }
+
+    private Throwable exposeOwnedJdbcFailure(Throwable failure) {
+        try {
+            throwOwnedJdbcFailure(failure);
+            return null;
+        } catch (IOException | InterruptedException | RuntimeException | Error ex) {
+            return ex;
+        }
+    }
+
+    private static Throwable addFailure(Throwable primary, Throwable secondary) {
+        if (secondary == null) {
+            return primary;
+        }
+        if (primary == null) {
+            return secondary;
+        }
+        if (primary == secondary) {
+            return primary;
+        }
+        for (Throwable suppressed : primary.getSuppressed()) {
+            if (suppressed == secondary) {
+                return primary;
+            }
+        }
+        primary.addSuppressed(secondary);
+        return primary;
+    }
+
+    private static void rethrowCatalogFailure(Throwable failure)
+            throws IOException, SQLException, InterruptedException {
+        if (failure instanceof IOException io) {
+            throw io;
+        }
+        if (failure instanceof SQLException sql) {
+            throw sql;
+        }
+        if (failure instanceof InterruptedException interrupted) {
+            throw interrupted;
+        }
+        if (failure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("Unexpected checked system catalog failure", failure);
+    }
+
+    private static void rethrowSystemLoadFailure(Throwable failure)
+            throws IOException, InterruptedException {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof IOException io) {
+            throw io;
+        }
+        if (failure instanceof InterruptedException interrupted) {
+            throw interrupted;
+        }
+        if (failure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IOException(failure);
     }
 
     /**
@@ -357,7 +539,10 @@ final class PgJdbcSystemLoader extends PgJdbcLoader {
      */
     public static void serialize(String path, String url) throws IOException, InterruptedException {
         var jdbcConnector = new PgJdbcConnector(url);
-        Serializable storage = new PgJdbcSystemLoader(jdbcConnector).getStorageFromJdbc();
+        Serializable storage;
+        try (var loader = new PgJdbcSystemLoader(jdbcConnector)) {
+            storage = loader.getStorageFromJdbc();
+        }
         Utils.serialize(path, storage);
     }
 }

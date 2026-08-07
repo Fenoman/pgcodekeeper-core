@@ -21,8 +21,8 @@ import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
 import org.pgcodekeeper.core.database.base.script.AbstractScriptBuilder;
 import org.pgcodekeeper.core.model.difftree.TreeElement;
-import org.pgcodekeeper.core.model.graph.ActionContainer;
 import org.pgcodekeeper.core.model.graph.ActionsToScriptConverter;
+import org.pgcodekeeper.core.model.graph.DepcyResolver;
 import org.pgcodekeeper.core.script.SQLActionType;
 import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.ISettings;
@@ -34,14 +34,15 @@ public class MsScriptBuilder extends AbstractScriptBuilder {
     }
 
     @Override
-    protected String getScript(Set<ActionContainer> actions, Set<IStatement> toRefresh, List<TreeElement> selected,
+    protected String getScript(DepcyResolver.ResolvedActions resolved, Set<IStatement> toRefresh,
+            List<TreeElement> selected,
             IDatabase oldDb, IDatabase newDb) {
         SQLScript script = new SQLScript(settings, newDb.getSeparator());
         if (getSettings().isAddTransaction()) {
             script.addStatement("BEGIN TRANSACTION", SQLActionType.BEGIN); //$NON-NLS-1$
         }
 
-        ActionsToScriptConverter.fillScript(script, actions, toRefresh, oldDb, newDb, selected);
+        ActionsToScriptConverter.fillScript(script, resolved, toRefresh, oldDb, newDb, selected);
 
         if (getSettings().isAddTransaction()) {
             script.addStatement("COMMIT", SQLActionType.END); //$NON-NLS-1$

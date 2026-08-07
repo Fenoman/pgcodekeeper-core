@@ -19,6 +19,8 @@ CREATE TABLE public.test (
     c2 text
 );
 
+ALTER TABLE public.test OWNER TO khazieva_gr;
+
 CREATE UNLOGGED SEQUENCE public.trigtest_i_seq1
     AS integer
     START WITH 1
