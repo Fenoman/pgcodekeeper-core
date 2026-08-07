@@ -294,3 +294,12 @@ Reference: Object = tmptz (TABLE), action = CREATE, line number = 462, charPosit
 Reference: Object = tmptz (TABLE), action = INSERT, line number = 463, charPositionInLine = 12
 Reference: action = EXPLAIN, line number = 464, charPositionInLine = 0
 Reference: action = SELECT, line number = 466, charPositionInLine = 0
+Reference: action = BEGIN, line number = 471, charPositionInLine = 0
+Reference: action = SET, line number = 472, charPositionInLine = 0
+Reference: action = SELECT, line number = 473, charPositionInLine = 0
+Reference: action = SELECT, line number = 474, charPositionInLine = 0
+Reference: action = SET, line number = 475, charPositionInLine = 0
+Reference: Object = timestamp_local_view (VIEW), action = CREATE, line number = 476, charPositionInLine = 12
+Reference: action = SELECT, line number = 481, charPositionInLine = 0
+Reference: Object = timestamp_local_view (VIEW), action = DROP, line number = 482, charPositionInLine = 10
+Reference: action = COMMIT, line number = 483, charPositionInLine = 0

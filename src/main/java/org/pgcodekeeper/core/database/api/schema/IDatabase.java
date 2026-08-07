@@ -120,7 +120,7 @@ public interface IDatabase extends IStatementContainer {
                 });
 
         getOverrides().addAll(lib.getOverrides());
-        lib.getObjReferences().forEach(getObjReferences()::putIfAbsent);
+        lib.getObjReferences().forEach(this::addReferencesIfAbsent);
     }
 
     /**
@@ -173,6 +173,20 @@ public interface IDatabase extends IStatementContainer {
     Map<String, Set<ObjectLocation>> getObjReferences();
 
     /**
+     * Tells whether this database keeps the file-to-object-location reverse
+     * index at all. A database that answers {@code false} turns every
+     * {@link #addReference(String, ObjectLocation)} into a no-op, so producers
+     * of locations can stop building the ones nobody will read - see
+     * {@code FullAnalyze}, which otherwise accumulates a copy of every
+     * reference found in the project only to drop it.
+     *
+     * @return true when object references are indexed
+     */
+    default boolean isCollectObjectReferences() {
+        return true;
+    }
+
+    /**
      * @return all analysis launcher for this database
      */
     List<IAnalysisLauncher> getAnalysisLaunchers();
@@ -191,6 +205,16 @@ public interface IDatabase extends IStatementContainer {
      * @param loc      the object location to add
      */
     void addReference(String fileName, ObjectLocation loc);
+
+    /**
+     * Adds all locations for a file when the file has no entry yet.
+     *
+     * @param fileName the file name to associate with the locations
+     * @param locations object locations to add
+     */
+    default void addReferencesIfAbsent(String fileName, Set<ObjectLocation> locations) {
+        getObjReferences().putIfAbsent(fileName, locations);
+    }
 
     /**
      * Clears all analysis launchers and trims the internal list to size.

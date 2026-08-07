@@ -514,7 +514,20 @@ public final class Utils {
         }
     }
 
-    private static void resetLibraryPrivileges(IDatabase oldDb, IDatabase newDb) {
+    /**
+     * Clears the privileges and owner of every object a library contributed
+     * with privileges ignored, on the opposite side of the comparison.
+     * <p>
+     * Both loading paths must call this: the sequential and parallel loaders
+     * here, and the comparison coordinator, which loads the two sides through
+     * factories and never passes through {@link #loadDatabases}. A side that
+     * skips it reports a privilege difference the migration cannot settle,
+     * because the library was read without privileges in the first place.
+     *
+     * @param oldDb the old side of the comparison
+     * @param newDb the new side of the comparison
+     */
+    public static void resetLibraryPrivileges(IDatabase oldDb, IDatabase newDb) {
         oldDb.getDescendants()
             .filter(IStatement::isIgnorePrivileges)
             .map(IStatement::toObjectReference)

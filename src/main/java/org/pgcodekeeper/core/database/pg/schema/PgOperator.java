@@ -334,6 +334,14 @@ public class PgOperator extends PgAbstractStatement implements IOperator, ISearc
         operatorDst.setHashes(isHashes);
         operatorDst.setRestrict(restrict);
         operatorDst.setJoin(join);
+        // The result type is not part of compare or of the hash - it is derived
+        // from the backing function rather than written in the DDL - but it is
+        // still state of this object, and a copy that drops it is an incomplete
+        // operator. Only a JDBC library reaches this: the analysis launcher that
+        // fills the field on the file side is carried over to the copy and
+        // refills it there, while a catalog read has no launcher, and the
+        // consumer of the missing value falls back to a generic column type.
+        operatorDst.setReturns(returns);
         return operatorDst;
     }
 }

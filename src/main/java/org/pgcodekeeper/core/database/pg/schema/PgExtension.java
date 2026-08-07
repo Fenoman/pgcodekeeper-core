@@ -122,6 +122,12 @@ public class PgExtension extends PgAbstractStatement {
     protected PgExtension getCopy() {
         PgExtension extDst = new PgExtension(name);
         extDst.setSchema(schema);
+        // Relocatability is a property of the installed extension, not of the
+        // DDL, so it rightly stays out of compare and of the hash - but it is
+        // what appendAlterSQL consults to choose between ALTER EXTENSION SET
+        // SCHEMA and a full recreate, and a copy that drops it silently answers
+        // "not relocatable" for an extension that is.
+        extDst.setRelocatable(relocatable);
         return extDst;
     }
 }

@@ -23,13 +23,16 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import org.pgcodekeeper.core.database.api.jdbc.ISupportedVersion;
+import org.pgcodekeeper.core.database.api.launcher.AnalysisLauncherRedirect;
 import org.pgcodekeeper.core.database.api.launcher.IAnalysisLauncher;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
@@ -40,6 +43,7 @@ import org.pgcodekeeper.core.database.api.schema.ObjectOverride;
 import org.pgcodekeeper.core.database.api.schema.ObjectReference;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
 import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
+import org.pgcodekeeper.core.database.pg.routine.RoutineIdentity;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.localizations.Messages;
@@ -54,8 +58,9 @@ import org.pgcodekeeper.core.localizations.Messages;
 public class PgDatabase extends PgAbstractStatement implements IDatabase {
 
     private final List<ObjectOverride> overrides = new ArrayList<>();
+    private final boolean collectObjectReferences;
     // Contains object references
-    private final Map<String, Set<ObjectLocation>> objReferences = new HashMap<>();
+    private final Map<String, Set<ObjectLocation>> objReferences;
     // Contains analysis launchers for all statements
     // (used for launch analyze and getting dependencies).
     private final ArrayList<IAnalysisLauncher> analysisLaunchers = new ArrayList<>();
@@ -68,12 +73,24 @@ public class PgDatabase extends PgAbstractStatement implements IDatabase {
     private final Map<String, PgSchema> schemas = new LinkedHashMap<>();
 
     private PgSchema defaultSchema;
+    private Set<RoutineIdentity> projectRoutineBodyDuplicates;
 
     /**
      * Creates a new PostgreSQL database.
      */
     public PgDatabase() {
+        this(true);
+    }
+
+    /**
+     * Creates a new PostgreSQL database.
+     *
+     * @param collectObjectReferences whether to build the file-to-object-location reverse index
+     */
+    public PgDatabase(boolean collectObjectReferences) {
         super("DB_name_placeholder");
+        this.collectObjectReferences = collectObjectReferences;
+        objReferences = collectObjectReferences ? new HashMap<>() : Collections.emptyMap();
     }
 
     @Override
@@ -374,18 +391,69 @@ public class PgDatabase extends PgAbstractStatement implements IDatabase {
     }
 
     @Override
+    public boolean isCollectObjectReferences() {
+        return collectObjectReferences;
+    }
+
+    @Override
     public List<IAnalysisLauncher> getAnalysisLaunchers() {
         return analysisLaunchers;
     }
 
     @Override
     public void addAnalysisLauncher(IAnalysisLauncher launcher) {
+        List<IAnalysisLauncher> redirect = AnalysisLauncherRedirect.active();
+        if (redirect != null) {
+            // lane-parallel catalog readers buffer launchers per reader and
+            // publish them later in the canonical serial reader order
+            redirect.add(launcher);
+            return;
+        }
         analysisLaunchers.add(launcher);
+    }
+
+    /**
+     * Records a parser-rejected routine identity independently of whether the
+     * rejected definition had an exchange-eligible body. The set is allocated
+     * only for invalid projects that actually contain a duplicate.
+     */
+    public synchronized void recordProjectRoutineBodyDuplicate(RoutineIdentity identity) {
+        if (projectRoutineBodyDuplicates == null) {
+            projectRoutineBodyDuplicates = new HashSet<>();
+        }
+        projectRoutineBodyDuplicates.add(Objects.requireNonNull(identity, "identity"));
+    }
+
+    /**
+     * Transfers parser-rejected routine identities to the one-shot final
+     * catalog, clearing the database reference before returning.
+     */
+    public synchronized Set<RoutineIdentity> takeProjectRoutineBodyDuplicates() {
+        Set<RoutineIdentity> current = projectRoutineBodyDuplicates;
+        projectRoutineBodyDuplicates = null;
+        return current == null ? new HashSet<>() : current;
+    }
+
+    /**
+     * Copies parser-rejected routine identities without consuming the markers.
+     */
+    public synchronized Set<RoutineIdentity> copyProjectRoutineBodyDuplicates() {
+        return projectRoutineBodyDuplicates == null
+                ? Set.of() : Set.copyOf(projectRoutineBodyDuplicates);
     }
 
     @Override
     public void addReference(String fileName, ObjectLocation loc) {
-        objReferences.computeIfAbsent(fileName, k -> new LinkedHashSet<>()).add(loc);
+        if (collectObjectReferences) {
+            objReferences.computeIfAbsent(fileName, k -> new LinkedHashSet<>()).add(loc);
+        }
+    }
+
+    @Override
+    public void addReferencesIfAbsent(String fileName, Set<ObjectLocation> locations) {
+        if (collectObjectReferences) {
+            objReferences.putIfAbsent(fileName, locations);
+        }
     }
 
     /**
@@ -408,6 +476,7 @@ public class PgDatabase extends PgAbstractStatement implements IDatabase {
         hasher.putUnordered(eventTriggers);
         hasher.putUnordered(fdws);
         hasher.putUnordered(servers);
+        hasher.putUnordered(userMappings);
         hasher.putUnordered(casts);
     }
 
@@ -416,6 +485,20 @@ public class PgDatabase extends PgAbstractStatement implements IDatabase {
         return this == obj || super.compare(obj);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Every database level child {@link #fillChildrenList(List)} publishes is
+     * covered here, and by {@link #computeChildrenHash(Hasher)} beside it, so
+     * that a database holding a user mapping is never called equal to one that
+     * holds none. A collection left out of both would make an incomplete
+     * database compare equal to an honestly empty one; leaving it out of one of
+     * the two would break the guard the hash gives the comparison.
+     * <p>
+     * Schemas are the deliberate exception: they are not compared here and not
+     * hashed, which is why {@code PgAntlrLoaderTest} takes its hashes per schema
+     * rather than on the database.
+     */
     @Override
     public boolean compareChildren(AbstractStatement obj) {
         return obj instanceof PgDatabase db && super.compareChildren(obj)
@@ -423,11 +506,12 @@ public class PgDatabase extends PgAbstractStatement implements IDatabase {
                 && eventTriggers.equals(db.eventTriggers)
                 && fdws.equals(db.fdws)
                 && servers.equals(db.servers)
+                && userMappings.equals(db.userMappings)
                 && casts.equals(db.casts);
     }
 
     @Override
     protected PgDatabase getCopy() {
-        return new PgDatabase();
+        return new PgDatabase(collectObjectReferences);
     }
 }

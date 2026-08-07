@@ -15,3 +15,12 @@ CONSTRAINT public.test_fk_1.fk
 	COLUMN public.test_pk.col1
 		TABLE public.test_pk
 			SCHEMA public
+	CONSTRAINT public.test_pk.test_pk_pk
+		TABLE public.test_pk
+			SCHEMA public
+		COLUMN public.test_pk.col1
+			TABLE public.test_pk
+				SCHEMA public
+		COLUMN public.test_pk.col2
+			TABLE public.test_pk
+				SCHEMA public

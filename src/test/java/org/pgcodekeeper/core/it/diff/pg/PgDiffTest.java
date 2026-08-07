@@ -19,14 +19,25 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.it.diff.pg;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.pgcodekeeper.core.TestUtils;
+import org.pgcodekeeper.core.database.api.schema.DbObjType;
+import org.pgcodekeeper.core.database.api.schema.IDatabase;
+import org.pgcodekeeper.core.database.api.schema.IStatement;
+import org.pgcodekeeper.core.database.api.schema.ObjectReference;
+import org.pgcodekeeper.core.database.base.parser.FullAnalyze;
 import org.pgcodekeeper.core.database.pg.PgDatabaseProvider;
 import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
+import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.CoreSettings;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -293,6 +304,14 @@ class PgDiffTest {
             "drop_view",
             // Tests scenario where VIEW is modified.
             "modify_view",
+            // Tests scenario where the query of a VIEW that spells its column
+            // names out is modified while the column list stays the same.
+            "modify_view_query_with_column_list",
+            // Tests scenario where only the column list of a VIEW is modified.
+            "modify_view_column_list",
+            // Tests scenario where the query of a VIEW that spells its column
+            // names out is modified together with one of its options.
+            "modify_view_query_and_option_with_column_list",
             // Tests scenario where VIEW is modified by addition of an option.
             "add_view_option",
             // Tests scenario where VIEW is modified by removal option.
@@ -364,10 +383,46 @@ class PgDiffTest {
             "alter_domain_drop_def",
             "alter_domain_set_def",
             "alter_domain_chg_def",
+            // Tests scenario where the project file states the DEFAULT of a domain
+            // in a separate ALTER DOMAIN: SET DEFAULT of the default the database
+            // already has must produce nothing, DROP DEFAULT must produce the drop.
+            "alter_domain_def_via_alter",
             "alter_domain_set_not_null",
             "alter_domain_drop_not_null",
+            // Tests scenario where the project file states the NOT NULL of a domain
+            // in a separate ALTER DOMAIN: SET NOT NULL of the constraint the database
+            // already has must produce nothing, DROP NOT NULL must produce the drop.
+            "alter_domain_not_null_via_alter",
             "alter_domain_add_constr",
             "alter_domain_drop_constr",
+            // Tests scenario where the project file states its constraints through
+            // separate ALTER DOMAIN statements: a dropped constraint must reach the
+            // database, and so must the validation of a NOT VALID one.
+            "alter_domain_constraint_via_alter",
+            // The same for a table, where the constraint may also be a named
+            // NOT NULL that lives outside the constraint map: a dropped
+            // constraint must reach the database, so must the validation of a
+            // NOT VALID one, and so must the deferrability an ALTER CONSTRAINT
+            // states. Each half declares the constraint before altering it, so
+            // a branch left unread empties the diff instead of changing it.
+            "alter_table_constraint_via_alter",
+            // The same for the columns of a table: a type, a dropped column, a
+            // dropped default, a dropped NOT NULL and a rename must all reach
+            // the model. The first four halves declare what they alter, so a
+            // branch left unread empties the diff instead of changing it; the
+            // rename is the other way round, spelling in the original the name
+            // the new file arrives at, so an unread one fills the diff with the
+            // DROP COLUMN / ADD COLUMN pair it used to produce.
+            "alter_table_column_via_alter",
+            // And for the properties of the table itself: the persistence, the
+            // tablespace, a storage parameter set and another one reset, the
+            // cluster, both halves of the inherit pair and the options of a
+            // foreign table. Every half declares what it alters before altering
+            // it, so a branch left unread empties the diff instead of changing
+            // it. The access method is left to the unit test on purpose - a
+            // change of it recreates the table rather than altering it, which
+            // would say nothing about this branch and much about that one.
+            "alter_table_property_via_alter",
             "alter_domain_add_not_valid_constr",
             "alter_domain_drop_not_valid_constr",
             "drop_domain_data_type",
@@ -432,6 +487,10 @@ class PgDiffTest {
             "modify_materialized_view_access_method",
             // Tests scenario where materialized VIEW is changed.
             "modify_materialized_view",
+            // Tests scenario where the query of a materialized VIEW that spells
+            // its column names out is modified while the column list stays the
+            // same.
+            "modify_materialized_view_query_with_column_list",
             // Tests scenario where empty SEQUENCE is compared.
             "compare_empty_sequence",
             // Tests scenario where TRIGGER with multiple events is added.
@@ -624,7 +683,38 @@ class PgDiffTest {
             // Test creating tables with not null constraint
             "create_table_not_null",
             // Test scenario when at index added inherit
-            "alter_index_attach"
+            "alter_index_attach",
+            // Test scenario where the unique INDEX a FOREIGN KEY is pinned to is
+            // replaced by a UNIQUE CONSTRAINT; the unchanged FK must be dropped
+            // and recreated around it
+            "drop_unique_index_used_by_fk",
+            // Test scenario where a PRIMARY KEY is recreated while an unchanged
+            // FOREIGN KEY references its columns in a permuted order
+            "recreate_pk_under_permuted_fk",
+            // Same, with the referenced uniqueness provided by a unique INDEX
+            "recreate_unique_index_under_permuted_fk",
+            // Test scenario where a VIEW calls a FUNCTION whose body reads that
+            // same VIEW: the routine has to come first on creation
+            "view_function_cycle_create",
+            // and last on removal
+            "view_function_cycle_drop",
+            // Tests scenario where the two sides spell the same access method
+            // differently - one writes USING btree, the other leaves the default
+            // to the server - for an INDEX and for an EXCLUDE CONSTRAINT
+            "default_access_method",
+            // and where the access method really changes
+            "change_access_method",
+            // Tests scenario where the two sides spell the same partition bound
+            // differently: the case of MODULUS/REMAINDER/MINVALUE and the space
+            // after a comma
+            "partition_bound_spelling",
+            // and where the bound really changes
+            "change_partition_bound",
+            // Tests scenario where the two sides spell the same storage
+            // parameter values differently: quoted, bare and in either case
+            "storage_param_spelling",
+            // and where a storage parameter value really changes
+            "change_storage_param"
 
     })
     void diffTest(String fileNameTemplate) throws IOException, InterruptedException {
@@ -638,12 +728,73 @@ class PgDiffTest {
     @CsvSource(delimiter = ';', value = {
             "compare_table;                 Comparing a table sugar",
             "compare_view;                  Comparing a query in a view",
+            "compare_view_type_aliases;     Comparing type aliases in a view query",
             "compare_function;              Comparing a signature in a function",
+            "compare_index_where;            Comparing a partial index predicate written in another case",
+            "compare_index_expr;            Comparing an index expression written with other spacing and case",
+            "compare_check;                 Comparing a CHECK expression written with other spacing and case",
+            "compare_exclude;               Comparing an EXCLUDE predicate written with other spacing and case",
+            "compare_statistics_expr;       Comparing a statistics expression written with other spacing and case",
+            "compare_domain_check;          Comparing a domain CHECK expression added via CREATE vs ALTER DOMAIN, in another case",
+            "compare_domain_default;        Comparing a domain DEFAULT written with other spacing and case",
+            "compare_trigger_when;          Comparing a trigger WHEN condition written with other spacing and case",
+            "compare_rule_condition;        Comparing a rule WHERE condition written with other spacing and case",
+            "compare_column_default;        Comparing a column DEFAULT and a GENERATED expression written with other spacing and case",
+            "compare_policy_expressions;    Comparing a policy USING and WITH CHECK written with other spacing and case",
     })
     void compareTest(String fileNameTemplate) throws IOException, InterruptedException {
         String script = getScript(databaseProvider, fileNameTemplate,
                 new CoreSettings(), PgDiffTest.class);
         assertEquals("", script.trim());
+    }
+
+    @Test
+    void recursiveViewUsesItsReparsedTokenStream() throws IOException, InterruptedException {
+        var settings = new CoreSettings();
+        IStatement aliasView = loadView("""
+                CREATE RECURSIVE VIEW public.v_recursive(n) AS
+                SELECT NULL::int
+                UNION ALL
+                SELECT n FROM public.v_recursive;
+                """, "recursive view with alias", "v_recursive", settings);
+        IStatement canonicalView = loadView("""
+                CREATE RECURSIVE VIEW public.v_recursive(n) AS
+                SELECT NULL::integer
+                UNION ALL
+                SELECT n FROM public.v_recursive;
+                """, "recursive view with canonical type", "v_recursive", settings);
+
+        Assertions.assertTrue(aliasView.compare(canonicalView));
+    }
+
+    @Test
+    void preservesOriginalViewTypeAliasInCreationSql() throws IOException, InterruptedException {
+        var settings = new CoreSettings();
+        IDatabase database = loadTestDump(databaseProvider,
+                "compare_view_type_aliases_original.sql", PgDiffTest.class, settings);
+        IStatement view = database.getStatement(
+                new ObjectReference("public", "v_type_aliases", DbObjType.VIEW));
+        Assertions.assertNotNull(view);
+        var script = new SQLScript(settings, view.getSeparator());
+
+        view.getCreationSQL(script);
+        String ddl = script.getFullScript();
+
+        Assertions.assertAll(
+                () -> Assertions.assertTrue(ddl.contains("f_division int"), ddl),
+                () -> Assertions.assertFalse(ddl.contains("f_division integer"), ddl));
+    }
+
+    private IStatement loadView(String sql, String sourceName, String viewName, CoreSettings settings)
+            throws IOException, InterruptedException {
+        var loader = databaseProvider.getDumpLoader(
+                () -> new ByteArrayInputStream(sql.getBytes(StandardCharsets.UTF_8)), sourceName, settings);
+        IDatabase database = loader.load();
+        FullAnalyze.fullAnalyze(database, settings.getErrors(), settings.getVersion());
+        TestUtils.assertErrors(settings.getErrors());
+        IStatement view = database.getStatement(new ObjectReference("public", viewName, DbObjType.VIEW));
+        Assertions.assertNotNull(view);
+        return view;
     }
 
     /**
@@ -681,7 +832,9 @@ class PgDiffTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "alter_greenplum_table"
+            "alter_greenplum_table",
+            // an enum value added and used by the same script cannot share its transaction
+            "enum_add_value_used_in_same_transaction"
     })
     void addTransactionTest(String fileNameTemplate) throws IOException, InterruptedException {
         var settings = new CoreSettings();

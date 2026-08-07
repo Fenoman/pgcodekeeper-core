@@ -32,7 +32,7 @@ import org.pgcodekeeper.core.localizations.Messages;
  * Provides hierarchical tree structure for organizing database objects and their relationships
  * during schema comparison operations.
  */
-public final class TreeElement {
+public final class TreeElement implements IgnoreRuleTarget {
 
     /**
      * Represents the side of difference in schema comparison.
@@ -54,6 +54,7 @@ public final class TreeElement {
      *
      * @return the element name
      */
+    @Override
     public String getName() {
         return name;
     }
@@ -63,6 +64,7 @@ public final class TreeElement {
      *
      * @return the object type
      */
+    @Override
     public DbObjType getType() {
         return type;
     }
@@ -164,6 +166,21 @@ public final class TreeElement {
     }
 
     /**
+     * Replaces the children of this element with the given survivors.
+     * <p>
+     * Used by {@link DiffTree} to drop objects hidden by the ignore list from a
+     * freshly built tree. Survivors keep their identity and their order, and the
+     * dropped elements keep pointing at this element as their parent, so a
+     * dropped subtree stays internally consistent for logging.
+     *
+     * @param survivors the children to keep, in tree order
+     */
+    void retainChildren(List<TreeElement> survivors) {
+        children.clear();
+        children.addAll(survivors);
+    }
+
+    /**
      * Gets a child element by name and type.
      *
      * @param name the child name to find
@@ -241,6 +258,47 @@ public final class TreeElement {
         }
         if (type == DbObjType.COLUMN) {
             return ((ITable) stParent).getColumn(name);
+        }
+        if (stParent instanceof IStatementContainer cont) {
+            return cont.getChild(name, type);
+        }
+
+        return null;
+    }
+
+    /**
+     * Gets the corresponding database statement, or null when the database does
+     * not hold it.
+     * <p>
+     * Same lookup as {@link #getStatement(IDatabase)} makes, and the same answer
+     * for every element that database holds. The two differ only over an element
+     * it does not: an element stands for a place in a comparison of two
+     * databases, so it can name a place only one of them has - a child of a
+     * table, or of a schema, the other side never had - and walking to it from
+     * the other side runs out of containers halfway.
+     * {@link #getStatement(IDatabase)} treats that as a caller asking the wrong
+     * side and throws; this one reads it as the answer it is, which is that
+     * there is no such statement here.
+     * <p>
+     * For callers that already know the side of an element the two are
+     * interchangeable. Use this one where an element of either side may be
+     * offered to either database and "not in this one" is an expected outcome
+     * rather than a mistake.
+     *
+     * @param db the database to retrieve statement from
+     * @return the corresponding database statement, or null if the database does
+     * not hold it
+     */
+    public IStatement findStatement(IDatabase db) {
+        if (type == DbObjType.DATABASE) {
+            return db;
+        }
+        IStatement stParent = parent.findStatement(db);
+        if (stParent == null) {
+            return null;
+        }
+        if (type == DbObjType.COLUMN) {
+            return stParent instanceof ITable table ? table.getColumn(name) : null;
         }
         if (stParent instanceof IStatementContainer cont) {
             return cont.getChild(name, type);
@@ -418,6 +476,7 @@ public final class TreeElement {
      *
      * @return this element's qualified name
      */
+    @Override
     public String getQualifiedName() {
         String qname = getContainerQName();
         return qname.isEmpty() ? name : qname + '.' + name;

@@ -16,9 +16,11 @@
 package org.pgcodekeeper.core.database.api.script;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.model.difftree.TreeElement;
+import org.pgcodekeeper.core.model.graph.DepcyResolver.DepcyGraphs;
 
 /**
  * Interface for script builder
@@ -36,4 +38,23 @@ public interface IScriptBuilder {
      * @throws IOException if an I/O error occurs
      */
     public String createScript(TreeElement root, IDatabase oldDb, IDatabase newDb) throws IOException;
+
+    /**
+     * Builds a script like {@link #createScript(TreeElement, IDatabase, IDatabase)}, reusing a
+     * pair of dependency graphs the caller already built for these two models.
+     * <p>
+     * A dependency graph is a function of its database model alone, so a caller that scripts
+     * one loaded comparison several times over - with different post-load settings each time -
+     * can build the pair once and pass it to every call. The default implementation ignores
+     * the offer and builds its own, which costs time but never correctness.
+     *
+     * @param sharedGraphs source of graphs built from these same two models, consulted only if
+     *                     graphs are needed at all, or {@code null} to build a fresh pair
+     * @return SQL migration script
+     * @throws IOException if an I/O error occurs
+     */
+    default String createScript(TreeElement root, IDatabase oldDb, IDatabase newDb,
+                                Supplier<DepcyGraphs> sharedGraphs) throws IOException {
+        return createScript(root, oldDb, newDb);
+    }
 }

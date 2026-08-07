@@ -48,7 +48,24 @@ public class DepcyFinder {
                         Collection<DbObjType> filterObjTypes, boolean isInvertFilter,
                         Collection<Dependency> additionalDependencies) {
         this.db = db;
-        DepcyGraph dg = new DepcyGraph(db);
+        // the source is borrowed, not copied. The public DepcyGraph constructor
+        // deep-copies its argument, and this class kept the original as well -
+        // two whole models alive at once, for a walk that writes to neither:
+        // the graph build and addCustomDepcies below touch only the graph's own
+        // vertex and edge sets, and searchDeps/fillTree do nothing but read
+        // names, types, parents and edges. Nothing here outlives the static
+        // entry points either, both of which return a List<String>, so no
+        // borrowed vertex escapes to a caller that could hold or change it.
+        //
+        // It also removes a value-equality bridge: the walk starts from
+        // statements of the original while the vertices used to be their
+        // copies, so every lookup matched by content - a deep hashCode over the
+        // model - rather than by identity, and any field the copy failed to
+        // carry would have made the lookup miss its own vertex.
+        //
+        // Not applied to SimpleDepcyResolver, whose graph is retained by a
+        // caller and whose vertices are returned to it.
+        DepcyGraph dg = new DepcyGraph(db, false, DepcyGraph.Ownership.BORROW_READ_ONLY);
         dg.addCustomDepcies(additionalDependencies);
         this.graph = isReverse ? dg.getGraph() : dg.getReversedGraph();
         this.depth = depth;

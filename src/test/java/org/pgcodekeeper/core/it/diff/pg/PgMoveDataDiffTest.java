@@ -49,6 +49,10 @@ class PgMoveDataDiffTest {
             "move_data_foreign",
             //implementation for data movement test in PG (with identity columns)
             "move_data_identity",
+            // identity columns whose names have to be quoted - the RESTART block
+            // names each of them twice, once as an identifier and once inside a
+            // string literal, and the two spellings are not the same one
+            "move_data_quoted_identity",
             //implementation for partition table data movement test in PG
             "move_data_partition_table",
             //implementation for partition table data movement test in PG (with identity columns)

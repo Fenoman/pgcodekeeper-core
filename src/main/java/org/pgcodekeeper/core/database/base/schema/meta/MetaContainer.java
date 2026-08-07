@@ -28,7 +28,16 @@ import org.pgcodekeeper.core.database.api.schema.meta.IMetaContainer;
  */
 public class MetaContainer implements IMetaContainer {
 
-    private final List<ICast> casts = new ArrayList<>();
+    /**
+     * Implicit casts indexed by their source type: {@code source -> targets}.
+     * <p>
+     * The analyzer asks {@link #containsCastImplicit} once per candidate per argument while
+     * resolving an overloaded call, and twice per candidate for an operator, so a flat list of
+     * casts was walked end to end millions of times over a project-sized corpus - a full walk
+     * on every miss, and a miss is the common answer. Measured on a 24 000 file project:
+     * 7.5 million calls, 832 million comparisons. The index replies out of one hash lookup.
+     */
+    private final Map<String, Set<String>> implicitCastsBySource = new HashMap<>();
 
     /**
      * Functions grouped by schema name
@@ -66,7 +75,9 @@ public class MetaContainer implements IMetaContainer {
             return;
         }
         if (st instanceof ICast cast && cast.getContext() == CastContext.IMPLICIT) {
-            casts.add(cast);
+            implicitCastsBySource
+                    .computeIfAbsent(cast.getSource(), e -> new HashSet<>())
+                    .add(cast.getTarget());
             return;
         }
         if (st instanceof IOperator oper) {
@@ -91,13 +102,8 @@ public class MetaContainer implements IMetaContainer {
 
     @Override
     public boolean containsCastImplicit(String source, String target) {
-        for (ICast cast : casts) {
-            if (source.equals(cast.getSource())
-                    && target.equals(cast.getTarget())) {
-                return true;
-            }
-        }
-        return false;
+        Set<String> targets = implicitCastsBySource.get(source);
+        return targets != null && targets.contains(target);
     }
 
     @Override

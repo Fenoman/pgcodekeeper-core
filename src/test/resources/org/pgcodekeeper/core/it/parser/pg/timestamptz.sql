@@ -464,3 +464,20 @@ insert into tmptz values ('2017-01-18 00:00+00');
 explain (costs off)
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
+
+--
+-- Test LOCAL time zone (PostgreSQL 17)
+--
+BEGIN;
+SET LOCAL TIME ZONE 'Europe/Paris';
+VALUES (CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT LOCAL);
+VALUES (TIMESTAMP '1978-07-07 19:38' AT LOCAL);
+SET LOCAL TimeZone TO 'UTC';
+CREATE VIEW timestamp_local_view AS
+  SELECT CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT LOCAL AS ttz_at_local,
+         timezone(CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE)) AS ttz_func,
+         TIMESTAMP '1978-07-07 19:38' AT LOCAL AS t_at_local,
+         timezone(TIMESTAMP '1978-07-07 19:38') AS t_func;
+SELECT pg_get_viewdef('timestamp_local_view', true);
+DROP VIEW timestamp_local_view;
+COMMIT;
