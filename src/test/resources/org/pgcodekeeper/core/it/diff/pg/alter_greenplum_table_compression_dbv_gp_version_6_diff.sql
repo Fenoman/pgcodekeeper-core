@@ -18,7 +18,7 @@ CREATE TABLE public.sales1 (
 	col1 text
 )
 USING ao_row
-WITH (compresstype=zstd, compresslevel=4, blocksize=65536)
+WITH (compresstype=zstd, compresslevel='4', blocksize='65536')
 DISTRIBUTED BY (id);
 
 CREATE TABLE public.sales3 (
@@ -26,7 +26,7 @@ CREATE TABLE public.sales3 (
 	col1 text
 )
 USING ao_row
-WITH (compresstype=zstd, compresslevel=4)
+WITH (compresstype=zstd, compresslevel='4')
 DISTRIBUTED BY (id);
 
 CREATE TABLE public.sales4 (
@@ -34,7 +34,7 @@ CREATE TABLE public.sales4 (
 	col1 text ENCODING (COMPRESSTYPE = rle_type, COMPRESSLEVEL = 1, BLOCKSIZE = 32768)
 )
 USING ao_column
-WITH (compresstype=zstd, compresslevel=4)
+WITH (compresstype=zstd, compresslevel='4')
 DISTRIBUTED BY (id);
 
 CREATE TABLE public.sales5 (
@@ -43,7 +43,7 @@ CREATE TABLE public.sales5 (
 	col2 text ENCODING (COMPRESSTYPE = zstd, COMPRESSLEVEL = 4, BLOCKSIZE = 32768)
 )
 USING ao_column
-WITH (compresstype=zstd, compresslevel=4)
+WITH (compresstype=zstd, compresslevel='4')
 DISTRIBUTED BY (id);
 
 CREATE TABLE public.sales6 (
@@ -51,7 +51,7 @@ CREATE TABLE public.sales6 (
 	col1 text
 )
 USING my_method
-WITH (fillfactor=50)
+WITH (fillfactor='50')
 DISTRIBUTED BY (id);
 
 ALTER TABLE public.sales2

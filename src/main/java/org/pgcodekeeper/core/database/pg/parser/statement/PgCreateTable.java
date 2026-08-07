@@ -107,7 +107,8 @@ public final class PgCreateTable extends PgTableAbstract {
             fillColumns(colCtx, table, schemaName, tablespace);
         } else {
             String partBound = getFullCtxText(partCtx.for_values_bound());
-            table = fillRegularTable(new PgPartitionTable(tableName, partBound));
+            table = fillRegularTable(new PgPartitionTable(tableName, partBound,
+                    PgParserUtils.normalizePartitionBound(partBound)));
             fillTypeColumns(partCtx.list_of_type_column_def(), table, schemaName, tablespace);
             addInherit(table, getIdentifiers(partCtx.parent_table));
         }
@@ -178,25 +179,6 @@ public final class PgCreateTable extends PgTableAbstract {
         }
 
         return table;
-    }
-
-    private void parseOptions(List<Storage_parameter_optionContext> options, PgAbstractRegularTable table) {
-        for (Storage_parameter_optionContext option : options) {
-            Storage_parameter_nameContext key = option.storage_parameter_name();
-            List<Col_labelContext> optionIds = key.col_label();
-            VexContext valueCtx = option.vex();
-            String value = valueCtx == null ? "" : valueCtx.getText();
-            String optionText = key.getText();
-            if ("OIDS".equalsIgnoreCase(optionText)) {
-                if ("TRUE".equalsIgnoreCase(value) || "'TRUE'".equalsIgnoreCase(value)) {
-                    table.setHasOids(true);
-                }
-            } else if ("toast".equals(QNameParser.getSecondName(optionIds))) {
-                fillOptionParams(value, QNameParser.getFirstName(optionIds), true, table::addOption);
-            } else {
-                fillOptionParams(value, optionText, false, table::addOption);
-            }
-        }
     }
 
     @Override

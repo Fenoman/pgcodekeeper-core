@@ -103,7 +103,7 @@ ALTER TABLE public.comment_test
 ALTER TABLE public.test_options
 	ALTER COLUMN field1 TYPE character(60) USING field1::character(60); /* TYPE change - table: public.test_options original: character(64) new: character(60) */
 
-ALTER TABLE ONLY public.test_options ALTER COLUMN field1 SET (n_distinct=4);
+ALTER TABLE ONLY public.test_options ALTER COLUMN field1 SET (n_distinct='4');
 
 ALTER TABLE public.test_options
 	ALTER COLUMN field2 TYPE character(60) USING field2::character(60), /* TYPE change - table: public.test_options original: character(64) new: character(60) */

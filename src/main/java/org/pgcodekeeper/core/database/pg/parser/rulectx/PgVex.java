@@ -138,6 +138,19 @@ public class PgVex {
         return isB ? null : vex.ZONE();
     }
 
+    /**
+     * The {@code AT LOCAL} operator PostgreSQL 17 added beside
+     * {@code AT TIME ZONE}. {@code LOCAL} appears in no other {@code vex}
+     * alternative, so the token alone identifies it; {@code AT} does not, since
+     * {@code AT TIME ZONE} carries it too. Like the neighbour it has no
+     * {@code vex_b} form - postgres' {@code b_expr} carries neither.
+     *
+     * @return the {@code LOCAL} token, or null when this is not that alternative
+     */
+    public TerminalNode atLocal() {
+        return isB ? null : vex.LOCAL();
+    }
+
     public TerminalNode exp() {
         return isB ? vexB.EXP() : vex.EXP();
     }

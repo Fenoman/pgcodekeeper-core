@@ -155,7 +155,10 @@ public final class PgValueExpr extends PgAbstractExpr {
             return operandsList.get(0);
         }
 
-        if (vex.timeZone() != null) {
+        // AT TIME ZONE and its PostgreSQL 17 sibling AT LOCAL: both answered with
+        // the operand's own type, which is the approximation this analyzer has
+        // always made for the pair.
+        if (vex.timeZone() != null || vex.atLocal() != null) {
             return operandsList.get(0);
         }
 
@@ -564,9 +567,12 @@ public final class PgValueExpr extends PgAbstractExpr {
                 ret.setSecond(PgParserAbstract.getTypeName(dataTypeCtx));
                 addTypeDepcy(dataTypeCtx);
             } else {
+                // every member of this rule is name-typed except SYSTEM_USER
+                // (PostgreSQL 16), which pg_proc declares as text
                 ret = new ModPair<>(system.USER() != null ? "current_user"
                         : system.getChild(0).getText().toLowerCase(Locale.ROOT),
-                        PgTypesSetManually.NAME);
+                        system.SYSTEM_USER() != null
+                                ? PgTypesSetManually.TEXT : PgTypesSetManually.NAME);
             }
         } else if ((datetime = function.date_time_function()) != null) {
             ret = analyzeDate(datetime);
@@ -991,7 +997,15 @@ public final class PgValueExpr extends PgAbstractExpr {
                 addDepcy(PgParserUtils.parseQName(s).getIds(), DbObjType.TABLE, start);
                 break;
             case "regtype":
-                addDepcy(PgParserUtils.parseQName(s).getIds(), DbObjType.TYPE, start);
+                Data_typeContext dataType = PgParserUtils.parseDataType(s);
+                if (dataType == null || dataType.predefined_type() == null) {
+                    break;
+                }
+                Schema_qualified_name_nontypeContext customType =
+                        dataType.predefined_type().schema_qualified_name_nontype();
+                if (customType != null && customType.identifier() != null) {
+                    addDepcy(PgParserAbstract.getIdentifiers(customType), DbObjType.TYPE, start);
+                }
                 break;
             case "regnamespace":
                 addSchemaDepcy(PgParserUtils.parseQName(s).getIds(), start);

@@ -34,14 +34,27 @@ public class PgPartitionTable extends PgAbstractRegularTable implements IPartiti
     private final String partitionBounds;
 
     /**
+     * The bound as the comparison sees it: the same tokens with canonical
+     * spacing and every unquoted word raised to upper case, as
+     * {@code PgParserUtils.normalizePartitionBound} builds it.
+     * <p>
+     * {@link #partitionBounds} keeps the text the DDL is written from, because a
+     * project file must round-trip exactly as its author wrote it, and an
+     * {@code ATTACH PARTITION} has to state a bound the server accepts.
+     */
+    private final String partitionBoundsNormalized;
+
+    /**
      * Creates a new partition table.
      *
-     * @param name            table name
-     * @param partitionBounds partition bounds definition
+     * @param name                      table name
+     * @param partitionBounds           partition bounds definition, as written
+     * @param partitionBoundsNormalized the same bound normalized for comparison
      */
-    public PgPartitionTable(String name, String partitionBounds) {
+    public PgPartitionTable(String name, String partitionBounds, String partitionBoundsNormalized) {
         super(name);
         this.partitionBounds = partitionBounds;
+        this.partitionBoundsNormalized = partitionBoundsNormalized;
     }
 
     @Override
@@ -57,9 +70,7 @@ public class PgPartitionTable extends PgAbstractRegularTable implements IPartiti
             sbSQL.append(" (\n");
 
             int start = sbSQL.length();
-            for (PgColumn column : columns) {
-                writeColumn(column, sbSQL, script);
-            }
+            writeColumns(sbSQL, script);
 
             if (start != sbSQL.length()) {
                 sbSQL.setLength(sbSQL.length() - 2);
@@ -117,7 +128,7 @@ public class PgPartitionTable extends PgAbstractRegularTable implements IPartiti
             Inherits oldInherits = inherits.get(0);
             Inherits newInherits = newTable.inherits.get(0);
 
-            if (!Objects.equals(partitionBounds, table.partitionBounds)
+            if (!Objects.equals(partitionBoundsNormalized, table.partitionBoundsNormalized)
                     || !Objects.equals(oldInherits, newInherits)) {
                 script.addStatement(appendTablePartiton(oldInherits.getQualifiedName(), "DETACH"));
                 StringBuilder sql = appendTablePartiton(newInherits.getQualifiedName(), "ATTACH");
@@ -146,7 +157,7 @@ public class PgPartitionTable extends PgAbstractRegularTable implements IPartiti
     @Override
     public void computeHash(Hasher hasher) {
         super.computeHash(hasher);
-        hasher.put(partitionBounds);
+        hasher.put(partitionBoundsNormalized);
     }
 
     @Override
@@ -158,11 +169,11 @@ public class PgPartitionTable extends PgAbstractRegularTable implements IPartiti
     protected boolean compareTable(PgAbstractTable obj) {
         return obj instanceof PgPartitionTable table
                 && super.compareTable(table)
-                && Objects.equals(partitionBounds, table.partitionBounds);
+                && Objects.equals(partitionBoundsNormalized, table.partitionBoundsNormalized);
     }
 
     @Override
     protected PgAbstractTable getTableCopy() {
-        return new PgPartitionTable(name, partitionBounds);
+        return new PgPartitionTable(name, partitionBounds, partitionBoundsNormalized);
     }
 }

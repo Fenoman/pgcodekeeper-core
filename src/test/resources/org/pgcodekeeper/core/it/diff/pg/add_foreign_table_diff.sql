@@ -30,7 +30,7 @@ OPTIONS (
 
 ALTER FOREIGN TABLE public.films ALTER COLUMN code SET STORAGE PLAIN;
 
-ALTER FOREIGN TABLE public.films ALTER COLUMN code SET (n_distinct_inherited=1, n_distinct=-0.7);
+ALTER FOREIGN TABLE public.films ALTER COLUMN code SET (n_distinct_inherited='1', n_distinct='-0.7');
 
 ALTER FOREIGN TABLE public.films ALTER COLUMN code OPTIONS (column_name 'number');
 

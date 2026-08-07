@@ -23,6 +23,7 @@ import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.api.schema.ISchema;
 import org.pgcodekeeper.core.database.api.schema.IStatementContainer;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgIndexAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.schema.*;
@@ -99,7 +100,7 @@ public final class PgCreateIndex extends PgParserAbstract {
     private void parseIndex(Index_restContext rest, String schemaName, String tableName, PgIndex ind, String location) {
         db.addAnalysisLauncher(new PgIndexAnalysisLauncher(ind, rest, location));
 
-        fillSimpleColumns(ind, rest.index_columns().index_column(), null);
+        fillSimpleColumns(ind, rest.index_columns().index_column(), null, stream);
 
         if (rest.method != null) {
             ind.setMethod(rest.method.getText());
@@ -122,7 +123,7 @@ public final class PgCreateIndex extends PgParserAbstract {
                 String key = option.storage_parameter_name().getText();
                 VexContext v = option.vex();
                 String value = v == null ? "" : v.getText();
-                fillOptionParams(value, key, false, ind::addOption);
+                fillStorageParam(value, key, false, ind::addOption);
             }
         }
 
@@ -134,7 +135,8 @@ public final class PgCreateIndex extends PgParserAbstract {
 
         Index_whereContext wherePart = rest.index_where();
         if (wherePart != null) {
-            ind.setWhere(getExpressionText(wherePart.vex(), stream));
+            ind.setWhere(getExpressionText(wherePart.vex(), stream),
+                    PgParserUtils.normalizeWhitespaceUnquoted(wherePart.vex(), stream));
         }
     }
 

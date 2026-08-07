@@ -25,6 +25,10 @@ operator_args_parser
     : operator_name operator_args? EOF
     ;
 
+data_type_eof
+    : data_type EOF
+    ;
+
 vex_eof
     : vex (COMMA vex)* EOF
     ;
@@ -3473,6 +3477,10 @@ vex
   | vex collate_identifier
   | <assoc=right> (PLUS | MINUS) vex
   | vex AT TIME ZONE vex
+  // PostgreSQL 17, gram.y: a_expr AT LOCAL %prec AT - same precedence as AT TIME
+  // ZONE, hence the adjacent position. Deliberately absent from vex_b: postgres'
+  // b_expr carries neither AT form.
+  | vex AT LOCAL
   | vex EXP vex
   | vex (MULTIPLY | DIVIDE | MODULAR) vex
   | vex (PLUS | MINUS) vex
@@ -3488,6 +3496,10 @@ vex
   | vex IS NOT? DOCUMENT
   | vex IS NOT? UNKNOWN
   | vex IS NOT? OF LEFT_PAREN type_list RIGHT_PAREN
+  // PostgreSQL 13, gram.y: a_expr IS [NOT] [unicode_normal_form] NORMALIZED.
+  // Deparsed from a plain is_normalized() call by ruleutils, so the database
+  // emits it whether or not anyone spelled it this way.
+  | vex IS NOT? unicode_normal_form? NORMALIZED
   | vex ISNULL
   | vex NOTNULL
   | vex IS NOT? JSON (VALUE | SCALAR | ARRAY | OBJECT)? ((WITH | WITHOUT) UNIQUE KEYS?)?
@@ -3632,6 +3644,8 @@ system_function
     | CURRENT_ROLE
     | CURRENT_USER
     | SESSION_USER
+    // PostgreSQL 16. Unlike its neighbours here it is text-typed, not name-typed
+    | SYSTEM_USER
     | USER
     | cast_specification
     ;
@@ -3650,6 +3664,16 @@ string_value_function
     | POSITION LEFT_PAREN vex_b IN vex RIGHT_PAREN
     | OVERLAY LEFT_PAREN vex PLACING vex FROM vex (FOR vex)? RIGHT_PAREN
     | COLLATION FOR LEFT_PAREN vex RIGHT_PAREN
+    // PostgreSQL 13, gram.y: NORMALIZE '(' a_expr [',' unicode_normal_form] ')'.
+    // The form is a keyword rather than an expression, so it stays out of vex()
+    // and the analyzer sees exactly one argument
+    | NORMALIZE LEFT_PAREN vex (COMMA unicode_normal_form)? RIGHT_PAREN
+    ;
+
+// gram.y: unicode_normal_form. Shared by NORMALIZE() and by the IS NORMALIZED
+// predicate in vex
+unicode_normal_form
+    : NFC | NFD | NFKC | NFKD
     ;
 
 xml_function

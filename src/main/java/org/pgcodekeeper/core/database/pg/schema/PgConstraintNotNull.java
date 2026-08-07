@@ -111,6 +111,10 @@ public class PgConstraintNotNull extends PgConstraint {
         return DUPLICATE_OBJECT;
     }
 
+    public boolean isNoInherit() {
+        return isNoInherit;
+    }
+
     public void setNoInherit(boolean noInherit) {
         isNoInherit = noInherit;
         resetHash();
@@ -163,7 +167,7 @@ public class PgConstraintNotNull extends PgConstraint {
     }
 
     @Override
-    protected PgConstraint getConstraintCopy() {
+    protected PgConstraint getConstraintCopy(String name) {
         var con = new PgConstraintNotNull(name);
         con.setNoInherit(isNoInherit);
         return con;

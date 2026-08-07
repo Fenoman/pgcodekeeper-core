@@ -7,7 +7,7 @@ CREATE UNLOGGED TABLE public.t31 (
 )
 INHERITS (public.t1)
 PARTITION BY RANGE (c2 COLLATE public.french varchar_pattern_ops)
-WITH (autovacuum_enabled, fillfactor=80, OIDS=true)
+WITH (autovacuum_enabled, fillfactor='80', OIDS=true)
 TABLESPACE test_tablespace;
 
 ALTER TABLE public.t31 ENABLE ROW LEVEL SECURITY;
@@ -55,11 +55,11 @@ DROP TABLE public.t13;
 
 DROP TABLE public.t14;
 
-ALTER TABLE public.t15 SET (fillfactor=80);
+ALTER TABLE public.t15 SET (fillfactor='80');
 
 ALTER TABLE public.t16 RESET (fillfactor);
 
-ALTER TABLE public.t17 SET (autovacuum_enabled='false', fillfactor=90);
+ALTER TABLE public.t17 SET (autovacuum_enabled='false', fillfactor='90');
 
 ALTER TABLE public.t18 SET (autovacuum_enabled='false');
 
@@ -67,7 +67,7 @@ ALTER TABLE public.t18 RESET (fillfactor);
 
 ALTER TABLE public.t19 RESET (fillfactor);
 
-ALTER TABLE public.t20 SET (fillfactor=80);
+ALTER TABLE public.t20 SET (fillfactor='80');
 
 ALTER TABLE public.t21
 	SET TABLESPACE second_tablespace;

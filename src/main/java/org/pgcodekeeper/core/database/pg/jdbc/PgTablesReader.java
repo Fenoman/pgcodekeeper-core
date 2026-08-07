@@ -40,6 +40,7 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
     private static final String GP_SYSTEM_OPTIONS = "'format', 'formatter', 'delimiter', 'null', 'escape', 'quote'," +
             " 'header', 'newline', 'fill_missing_fields', 'force_not_null', 'is_writable', 'location_uris'," +
             " 'execute_on', 'log_errors', 'reject_limit', 'reject_limit_type', 'encoding'";
+    private final boolean includePrivileges;
 
     /**
      * Creates a new PgTablesReader.
@@ -48,6 +49,7 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgTablesReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -67,8 +69,10 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
         }
 
         // PRIVILEGES, OWNER
-        loader.setOwner(t, res.getLong("relowner"));
-        loader.setPrivileges(t, res.getString("aclarray"), schemaName);
+        if (includePrivileges) {
+            loader.setOwner(t, res.getLong("relowner"));
+            loader.setPrivileges(t, res.getString("aclarray"), schemaName);
+        }
         loader.setAuthor(t, res);
         loader.setComment(t, res);
 
@@ -132,7 +136,8 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
             if (partitionBound == null) {
                 t = new PgSimpleForeignTable(tableName, serverName);
             } else {
-                t = new PgPartitionForeignTable(tableName, serverName, partitionBound);
+                t = new PgPartitionForeignTable(tableName, serverName, partitionBound,
+                        PgParserUtils.normalizePartitionBound(partitionBound));
             }
             t.addDependency(new ObjectReference(serverName, DbObjType.SERVER));
         } else if (ofTypeOid != 0) {
@@ -141,7 +146,8 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
             t = new PgTypedTable(tableName, ofType);
             jdbcOfType.addTypeDepcy(t);
         } else if (partitionBound != null) {
-            t = new PgPartitionTable(tableName, partitionBound);
+            t = new PgPartitionTable(tableName, partitionBound,
+                    PgParserUtils.normalizePartitionBound(partitionBound));
         } else if (partitionGpBound != null) {
             t = createGpPartitionTable(tableName, partitionGpBound, partitionGpTemplate);
         } else {
@@ -252,14 +258,10 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
 
         Boolean[] colIsLocal = PgJdbcUtils.getColArray(res, "col_local");
         Long[] colCollation = PgJdbcUtils.getColArray(res, "col_collation");
-        Long[] colTypCollation = PgJdbcUtils.getColArray(res, "col_typcollation");
-        String[] colCollationName = PgJdbcUtils.getColArray(res, "col_collationname");
-        String[] colCollationSchema = PgJdbcUtils.getColArray(res, "col_collationnspname");
-        String[] colAcl = PgJdbcUtils.getColArray(res, "col_acl");
+        String[] colAcl = includePrivileges ? PgJdbcUtils.getColArray(res, "col_acl") : null;
         String[] colOptions = PgJdbcUtils.getColArray(res, "col_options");
         String[] colFOptions = PgJdbcUtils.getColArray(res, "col_foptions");
         String[] colStorages = PgJdbcUtils.getColArray(res, "col_storages");
-        String[] colDefaultStorages = PgJdbcUtils.getColArray(res, "col_default_storages");
 
         String[] colGenerated = null;
         if (PgSupportedVersion.GP_VERSION_7.isLE(loader.getVersion())) {
@@ -277,6 +279,11 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
         for (int i = 0; i < colNames.length; i++) {
             PgColumn column = new PgColumn(colNames[i]);
             column.setInherit(!colIsLocal[i]);
+            PgJdbcType columnType = loader.getCachedTypeByOid(colTypeIds[i]);
+            if (columnType == null) {
+                throw new IllegalStateException("Missing PostgreSQL type OID " + colTypeIds[i]
+                        + " for column " + t.getName() + '.' + colNames[i]);
+            }
 
             if (ofTypeOid == 0 && !column.isInherit()) {
                 String type = colTypeName[i];
@@ -284,7 +291,7 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
                 column.setType(type);
             }
 
-            loader.getCachedTypeByOid(colTypeIds[i]).addTypeDepcy(column);
+            columnType.addTypeDepcy(column);
 
             if (colOptions[i] != null) {
                 PgParserAbstract.fillOptionParams(colOptions[i].split(","), column::addOption, false, false, false);
@@ -296,7 +303,7 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
                 fillCompressOptions(column, colEncOptions[i]);
             }
 
-            if (!colStorages[i].equals(colDefaultStorages[i])) {
+            if (!colStorages[i].equals(columnType.getStorage())) {
                 switch (colStorages[i]) {
                     case "x":
                         column.setStorage("EXTENDED");
@@ -317,9 +324,16 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
 
             // unbox
             long collation = colCollation[i];
-            if (collation != 0 && collation != colTypCollation[i] && column.getType() != null) {
-                String collationSchema = colCollationSchema[i];
-                String collationName = colCollationName[i];
+            if (collation != 0 && collation != columnType.getCollation()
+                    && column.getType() != null) {
+                PgJdbcLoader.CachedCollation cachedCollation =
+                        loader.getCachedCollationByOid(collation);
+                if (cachedCollation == null) {
+                    throw new IllegalStateException("Missing PostgreSQL collation OID " + collation
+                            + " for column " + t.getName() + '.' + colNames[i]);
+                }
+                String collationSchema = cachedCollation.schema();
+                String collationName = cachedCollation.name();
                 column.setCollation(PgDiffUtils.getQuotedName(collationSchema) + '.' +
                         PgDiffUtils.getQuotedName(collationName));
                 addDep(column, collationSchema, collationName, DbObjType.COLLATION);
@@ -329,10 +343,38 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
                 String columnDefault = colDefaults[i];
                 IPgJdbcReader.checkObjectValidity(columnDefault, DbObjType.COLUMN, colNames[i]);
                 if (!columnDefault.isEmpty()) {
-                    column.setDefaultValue(columnDefault);
-                    loader.submitAntlrTask(columnDefault, p -> p.vex_eof().vex().get(0),
-                            ctx -> schema.getDatabase().addAnalysisLauncher(
-                                    new PgVexAnalysisLauncher(column, ctx, loader.getCurrentLocation())));
+                    // the catalog's own text is stored here and unconditionally,
+                    // as it already was before it grew a normalized half: the
+                    // task below is finalized only when the parse reported no
+                    // errors (AbstractJdbcLoader.submitAntlrTask), and an
+                    // expression this grammar cannot read must still reach the
+                    // model - without it the column would be written out with no
+                    // DEFAULT at all, which for a generated column is the whole
+                    // definition of it
+                    //
+                    // and the loss would not stop at the text: the two gates
+                    // below read getDefaultValue() from this same method, so
+                    // they run before any finalizer does. A column of a typed or
+                    // inherited table whose only own property is its DEFAULT
+                    // would count as not dumpable and never be added to the
+                    // table at all
+                    //
+                    // both halves get it, and the normalized one must not be
+                    // left empty: compare and computeHash read only that half,
+                    // so an unreadable DEFAULT would otherwise compare equal to
+                    // no DEFAULT at all and the difference would vanish from the
+                    // tree and from the script. On a successful parse the
+                    // finalizer overwrites it with the real normalization
+                    column.setDefaultValue(columnDefault, columnDefault);
+                    loader.submitAntlrTask(columnDefault,
+                            p -> new Pair<>(p.vex_eof().vex().get(0), (CommonTokenStream) p.getTokenStream()),
+                            pair -> {
+                                var vex = pair.getFirst();
+                                column.setDefaultValue(columnDefault,
+                                        PgParserUtils.normalizeWhitespaceUnquoted(vex, pair.getSecond()));
+                                schema.getDatabase().addAnalysisLauncher(
+                                        new PgVexAnalysisLauncher(column, vex, loader.getCurrentLocation()));
+                            });
                 }
             }
 
@@ -369,9 +411,11 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
             }
 
             // COLUMNS PRIVILEGES
-            String columnPrivileges = colAcl[i];
-            if (columnPrivileges != null && !columnPrivileges.isEmpty()) {
-                loader.setPrivileges(column, t, columnPrivileges, schema.getName());
+            if (includePrivileges) {
+                String columnPrivileges = colAcl[i];
+                if (columnPrivileges != null && !columnPrivileges.isEmpty()) {
+                    loader.setPrivileges(column, t, columnPrivileges, schema.getName());
+                }
             }
 
             if (ofTypeOid != 0 && !column.isNotNull()
@@ -512,13 +556,14 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
         addParentsPart(builder);
 
         builder
-                .with("nspnames", "SELECT n.oid, n.nspname FROM pg_catalog.pg_namespace n")
-                .with("collations",
-                        "SELECT c.oid, c.collname, n.nspname FROM pg_catalog.pg_collation c LEFT JOIN nspnames n ON n.oid = c.collnamespace")
                 .column("res.relname")
-                .column("res.relkind")
-                .column("res.relowner::bigint")
-                .column("res.relacl::text AS aclarray")
+                .column("res.relkind");
+        if (includePrivileges) {
+            builder
+                    .column("res.relowner::bigint")
+                    .column("res.relacl::text AS aclarray");
+        }
+        builder
                 .column("res.relpersistence AS persistence")
                 .column("res.reloptions")
                 .column("tc.reloptions AS toast_reloptions")
@@ -581,11 +626,19 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
     }
 
     private void addColumnsPart(QueryBuilder builder) {
+        QueryBuilder targetTables = new QueryBuilder()
+                .column("target.oid")
+                .from("pg_catalog.pg_class target")
+                .where("target.relkind IN ('f','r','p')")
+                .where("target.relnamespace IN (" + loader.getSchemas() + ')');
+        builder.with("target_tables", targetTables);
+
         QueryBuilder inheritsCteBuilder = new QueryBuilder();
         inheritsCteBuilder
                 .column("i.inhrelid")
                 .column("attr.attname")
                 .from("pg_catalog.pg_inherits i")
+                .join("JOIN target_tables tt ON tt.oid = i.inhrelid")
                 .join("JOIN pg_catalog.pg_attribute attr ON attr.attrelid = i.inhparent")
                 .where("attr.attnotnull")
                 .where("attr.attnum > 0");
@@ -599,25 +652,22 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
                 .column("pg_catalog.array_agg(pg_catalog.array_to_string(a.attoptions, ',') ORDER BY a.attnum) AS col_options")
                 .column("pg_catalog.array_agg(pg_catalog.array_to_string(a.attfdwoptions, ',') ORDER BY a.attnum) AS col_foptions")
                 .column("pg_catalog.array_agg(a.attstorage ORDER BY a.attnum) AS col_storages")
-                .column("pg_catalog.array_agg(t.typstorage ORDER BY a.attnum) AS col_default_storages")
                 .column("pg_catalog.array_agg(a.atthasdef ORDER BY a.attnum) AS col_has_default")
                 .column("pg_catalog.array_agg(pg_catalog.pg_get_expr(attrdef.adbin, attrdef.adrelid) ORDER BY a.attnum) AS col_defaults")
                 .column("pg_catalog.array_agg(d.description ORDER BY a.attnum) AS col_comments")
                 .column("pg_catalog.array_agg(a.atttypid::bigint ORDER BY a.attnum) AS col_type_ids")
                 .column("pg_catalog.array_agg(pg_catalog.format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) AS col_type_name")
                 .column("pg_catalog.array_agg(a.attstattarget ORDER BY a.attnum) AS col_statistics")
-                .column("pg_catalog.array_agg(a.attislocal ORDER BY a.attnum) AS col_local")
-                .column("pg_catalog.array_agg(a.attacl::text ORDER BY a.attnum) AS col_acl")
+                .column("pg_catalog.array_agg(a.attislocal ORDER BY a.attnum) AS col_local");
+        if (includePrivileges) {
+            subQueryBuilder.column("pg_catalog.array_agg(a.attacl::text ORDER BY a.attnum) AS col_acl");
+        }
+        subQueryBuilder
                 .column("pg_catalog.array_agg(a.attcollation::bigint ORDER BY a.attnum) AS col_collation")
-                .column("pg_catalog.array_agg(t.typcollation::bigint ORDER BY a.attnum) AS col_typcollation")
-                .column("pg_catalog.array_agg(cl.collname ORDER BY a.attnum) AS col_collationname")
-                .column("pg_catalog.array_agg(cl.nspname ORDER BY a.attnum) AS col_collationnspname")
                 .from("pg_catalog.pg_attribute a")
-                .join("JOIN pg_catalog.pg_class cc ON a.attrelid = cc.oid AND cc.relkind IN ('f','r','p')")
+                .join("JOIN target_tables cc ON cc.oid = a.attrelid")
                 .join("LEFT JOIN pg_catalog.pg_attrdef attrdef ON attrdef.adnum = a.attnum AND a.attrelid = attrdef.adrelid")
                 .join("LEFT JOIN pg_catalog.pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum AND d.classoid = 'pg_catalog.pg_class'::pg_catalog.regclass")
-                .join("LEFT JOIN pg_catalog.pg_type t ON t.oid = a.atttypid")
-                .join("LEFT JOIN collations cl ON cl.oid =  a.attcollation")
                 .where("a.attisdropped IS FALSE")
                 .where("a.attnum > 0 GROUP BY a.attrelid")
         ;
@@ -657,7 +707,6 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
         builder.column("columns.col_options");
         builder.column("columns.col_foptions");
         builder.column("columns.col_storages");
-        builder.column("columns.col_default_storages");
         builder.column("columns.col_has_default");
         builder.column("columns.col_defaults");
         builder.column("columns.col_comments");
@@ -665,11 +714,10 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
         builder.column("columns.col_type_name");
         builder.column("columns.col_statistics");
         builder.column("columns.col_local");
-        builder.column("columns.col_acl");
+        if (includePrivileges) {
+            builder.column("columns.col_acl");
+        }
         builder.column("columns.col_collation");
-        builder.column("columns.col_typcollation");
-        builder.column("columns.col_collationname");
-        builder.column("columns.col_collationnspname");
         builder.join(columns);
     }
 
@@ -679,6 +727,7 @@ public final class PgTablesReader extends PgAbstractSearchPathJdbcReader {
                 .column("pg_catalog.array_agg(inhrel.relname ORDER BY inh.inhrelid, inh.inhseqno) AS inhrelnames")
                 .column("pg_catalog.array_agg(inhns.nspname ORDER BY inh.inhrelid, inh.inhseqno) AS inhnspnames")
                 .from("pg_catalog.pg_inherits inh")
+                .join("JOIN target_tables tt ON tt.oid = inh.inhrelid")
                 .join("LEFT JOIN pg_catalog.pg_class inhrel ON inh.inhparent = inhrel.oid")
                 .join("LEFT JOIN pg_catalog.pg_namespace inhns ON inhrel.relnamespace = inhns.oid")
                 .groupBy("inh.inhrelid");

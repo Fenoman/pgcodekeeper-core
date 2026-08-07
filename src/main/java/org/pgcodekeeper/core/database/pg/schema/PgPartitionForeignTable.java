@@ -36,15 +36,28 @@ public class PgPartitionForeignTable extends PgAbstractForeignTable implements I
     private final String partitionBounds;
 
     /**
+     * The bound as the comparison sees it, built the same way and for the same
+     * reason as {@code PgPartitionTable.partitionBoundsNormalized}: both sides
+     * of the comparison state the same bound in different words, and only the
+     * database side is written by the server.
+     * <p>
+     * {@link #partitionBounds} keeps the text the DDL is written from.
+     */
+    private final String partitionBoundsNormalized;
+
+    /**
      * Creates a new partition foreign table.
      *
-     * @param name            table name
-     * @param serverName      foreign server name
-     * @param partitionBounds partition bounds definition
+     * @param name                      table name
+     * @param serverName                foreign server name
+     * @param partitionBounds           partition bounds definition, as written
+     * @param partitionBoundsNormalized the same bound normalized for comparison
      */
-    public PgPartitionForeignTable(String name, String serverName, String partitionBounds) {
+    public PgPartitionForeignTable(String name, String serverName, String partitionBounds,
+                                   String partitionBoundsNormalized) {
         super(name, serverName);
         this.partitionBounds = partitionBounds;
+        this.partitionBoundsNormalized = partitionBoundsNormalized;
     }
 
     @Override
@@ -60,7 +73,8 @@ public class PgPartitionForeignTable extends PgAbstractForeignTable implements I
     @Override
     protected boolean isNeedRecreate(PgAbstractTable newTable, ISettings settings) {
         return super.isNeedRecreate(newTable, settings)
-                || !(Objects.equals(partitionBounds, ((PgPartitionForeignTable) newTable).partitionBounds))
+                || !(Objects.equals(partitionBoundsNormalized,
+                        ((PgPartitionForeignTable) newTable).partitionBoundsNormalized))
                 || !inherits.equals(newTable.inherits);
     }
 
@@ -72,9 +86,7 @@ public class PgPartitionForeignTable extends PgAbstractForeignTable implements I
             sbSQL.append(" (\n");
 
             int start = sbSQL.length();
-            for (PgColumn column : columns) {
-                writeColumn(column, sbSQL, script);
-            }
+            writeColumns(sbSQL, script);
 
             if (start != sbSQL.length()) {
                 sbSQL.setLength(sbSQL.length() - 2);
@@ -96,7 +108,7 @@ public class PgPartitionForeignTable extends PgAbstractForeignTable implements I
     @Override
     public void computeHash(Hasher hasher) {
         super.computeHash(hasher);
-        hasher.put(partitionBounds);
+        hasher.put(partitionBoundsNormalized);
     }
 
     @Override
@@ -108,11 +120,11 @@ public class PgPartitionForeignTable extends PgAbstractForeignTable implements I
     protected boolean compareTable(PgAbstractTable obj) {
         return obj instanceof PgPartitionForeignTable table
                 && super.compareTable(table)
-                && Objects.equals(partitionBounds, table.partitionBounds);
+                && Objects.equals(partitionBoundsNormalized, table.partitionBoundsNormalized);
     }
 
     @Override
     protected PgAbstractTable getTableCopy() {
-        return new PgPartitionForeignTable(name, serverName, partitionBounds);
+        return new PgPartitionForeignTable(name, serverName, partitionBounds, partitionBoundsNormalized);
     }
 }

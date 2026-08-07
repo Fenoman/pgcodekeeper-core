@@ -38,6 +38,11 @@ import java.util.*;
  */
 public final class DepcyGraph {
 
+    enum Ownership {
+        COPY,
+        BORROW_READ_ONLY
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(DepcyGraph.class);
 
     private static final String REMOVE_DEP = Messages.DepcyGraph_log_remove_deps;
@@ -65,9 +70,13 @@ public final class DepcyGraph {
     private final IDatabase db;
 
     /**
-     * Copied database, graph source.<br>
-     * <b>Do not modify</b> any elements in this as it will break
-     * HashSets/HashMaps and with them the generated graph.
+     * Returns the database used as the graph source. Public constructors own a
+     * deep copy. Package-scoped callers may explicitly borrow the source under
+     * the {@link Ownership#BORROW_READ_ONLY} contract.<br>
+     * <b>Do not modify</b> any graph vertex in either mode: vertices are hash
+     * keys, so changing them breaks the graph and resolver sets/maps.
+     *
+     * @return owned copy or read-only borrowed database, according to ownership
      */
     public IDatabase getDb() {
         return db;
@@ -89,7 +98,11 @@ public final class DepcyGraph {
      * @param reduceGraph if true, merge column nodes into table nodes
      */
     public DepcyGraph(IDatabase graphSrc, boolean reduceGraph) {
-        db = (IDatabase) graphSrc.deepCopy();
+        this(graphSrc, reduceGraph, Ownership.COPY);
+    }
+
+    DepcyGraph(IDatabase graphSrc, boolean reduceGraph, Ownership ownership) {
+        db = ownership == Ownership.COPY ? (IDatabase) graphSrc.deepCopy() : graphSrc;
         create();
         removeCycles();
 
@@ -161,6 +174,30 @@ public final class DepcyGraph {
         graph.removeAllVertices(toRemove);
     }
 
+    /**
+     * Breaks a dependency cycle between a routine and a non-routine object by cutting the edge that leaves the
+     * routine.
+     * <p>
+     * The graph mixes two kinds of edge. One kind the server itself records in {@code pg_depend} and enforces: a view
+     * over a table, an index over a column, a key over the index backing it. The other kind is read out of routine
+     * bodies, which PostgreSQL deliberately does not track - a body may name an object that does not exist yet, and
+     * dropping that object leaves the routine in place and broken. Only the second kind can be cut without losing
+     * ordering the server actually demands, and an edge out of a routine that closes a cycle with an object of any
+     * other kind is of that kind: the cycle means the object already depends on the routine, and no object
+     * PostgreSQL pins a routine to can itself be built on that routine.
+     * <p>
+     * Cutting only the edges to columns, as this did before, left the plain {@code VIEW} case alone: a view that calls
+     * a function whose body reads that same view. The script then created the view before the function and dropped the
+     * function before the view, and the server rejected both.
+     * <p>
+     * A cycle whose other end is itself a routine is left standing. There neither direction is enforced - bodies
+     * resolve at call time, so mutually recursive routines can be created in either order - and the cycle is worth
+     * keeping: it is what {@code DepcyFinder} reports back to a caller asking what an object depends on.
+     * <p>
+     * The one cycle this cannot rescue is a routine reached through a signature rather than a body - a domain whose
+     * CHECK calls a function that takes that same domain as an argument. PostgreSQL cannot build that pair in a single
+     * pass either, so no edge choice here produces a working script.
+     */
     private void removeCycles() {
         CycleDetector<IStatement, DefaultEdge> detector = new CycleDetector<>(graph);
 
@@ -170,14 +207,22 @@ public final class DepcyGraph {
             }
 
             for (var vertex : detector.findCyclesContainingVertex(st)) {
-                if (vertex.getStatementType() == DbObjType.COLUMN) {
-                    graph.removeEdge(st, vertex);
+                if (vertex.equals(st.getParent()) || vertex instanceof PgAbstractFunction) {
+                    // the containment edge to the own schema is structural, never a body reference;
+                    // and between two routines neither direction is enforced, so there is nothing to fix
+                    continue;
+                }
+
+                if (graph.removeEdge(st, vertex) != null) {
                     var msg = REMOVE_DEP.formatted(st.getQualifiedName(), vertex.getQualifiedName());
                     LOG.info(msg);
+                }
 
+                if (vertex.getStatementType() == DbObjType.COLUMN) {
+                    // a body that reads a column reads its table as well, and that edge is just as weak
                     var table = vertex.getParent();
                     if (graph.removeEdge(st, table) != null) {
-                        msg = REMOVE_DEP.formatted(st.getQualifiedName(), table.getQualifiedName());
+                        var msg = REMOVE_DEP.formatted(st.getQualifiedName(), table.getQualifiedName());
                         LOG.info(msg);
                     }
                 }
@@ -211,17 +256,41 @@ public final class DepcyGraph {
 
         if (cont instanceof IStatementContainer c) {
             for (IStatement refCon : c.getChildrenByType(DbObjType.CONSTRAINT)) {
-                if (refCon instanceof IConstraintPk fkCon && refs.equals(fkCon.getColumns())) {
+                if (refCon instanceof IConstraintPk fkCon && canBackForeignKey(refs, fkCon.getColumns())) {
                     graph.addEdge(con, refCon);
                 }
             }
             for (IStatement ref : c.getChildrenByType(DbObjType.INDEX)) {
                 var refInd = (IIndex) ref;
-                if (refInd.isUnique() && refInd.compareColumns(refs)) {
+                if (refInd.isUnique() && refInd.canBackForeignKey(refs)) {
                     graph.addEdge(con, refInd);
                 }
             }
         }
+    }
+
+    /**
+     * Tells whether a primary key or unique constraint over {@code keyColumns} can back a foreign key that references
+     * {@code refs}.
+     * <p>
+     * The server pairs the two column lists up in any order - PostgreSQL does so in {@code transformFkeyCheckAttrs} -
+     * so {@code FOREIGN KEY (x, y) REFERENCES p (b, a)} is a legal way to reference a key over {@code (a, b)}.
+     * Comparing the lists position by position would declare that pair unrelated, leave the edge out of the graph and
+     * cost the migration the DROP/CREATE pair that has to bracket a recreated key.
+     *
+     * @param refs       the columns named on the REFERENCES side of a foreign key
+     * @param keyColumns the columns of the candidate primary key or unique constraint
+     * @return true if the constraint is a candidate backing for such a key
+     */
+    private static boolean canBackForeignKey(Collection<String> refs, Collection<String> keyColumns) {
+        if (refs.size() != keyColumns.size()) {
+            return false;
+        }
+        List<String> sortedRefs = new ArrayList<>(refs);
+        List<String> sortedKey = new ArrayList<>(keyColumns);
+        Collections.sort(sortedRefs);
+        Collections.sort(sortedKey);
+        return sortedRefs.equals(sortedKey);
     }
 
     /**

@@ -74,6 +74,7 @@ public final class PgCreateView extends PgParserAbstract {
     @Override
     public void parseObject() {
         Create_view_statementContext ctx = context;
+        CommonTokenStream viewQueryStream = stream;
         List<ParserRuleContext> ids = getIdentifiers(ctx.name);
         ParserRuleContext name = QNameParser.getFirstNameCtx(ids);
         PgAbstractView view = new PgView(name.getText());
@@ -101,10 +102,12 @@ public final class PgCreateView extends PgParserAbstract {
 
             var parser = PgParserUtils.createSqlParser(sql, "recursive view", null);
             ctx = parser.sql().statement(0).schema_statement().schema_create().create_view_statement();
+            viewQueryStream = (CommonTokenStream) parser.getTokenStream();
         }
         Select_stmtContext vQuery = ctx.v_query;
         if (vQuery != null) {
-            view.setQuery(getFullCtxText(vQuery), PgParserUtils.normalizeWhitespaceUnquoted(vQuery, stream));
+            view.setQuery(getFullCtxText(vQuery),
+                    PgParserUtils.normalizeViewQueryForComparison(vQuery, viewQueryStream));
             db.addAnalysisLauncher(new PgViewAnalysisLauncher(view, vQuery, fileName));
         }
         if (ctx.column_names != null) {
@@ -118,7 +121,7 @@ public final class PgCreateView extends PgParserAbstract {
             for (Storage_parameter_optionContext option : options) {
                 String key = option.storage_parameter_name().getText();
                 VexContext value = option.vex();
-                fillOptionParams(value != null ? value.getText() : "", key, false, view::addOption);
+                fillStorageParam(value != null ? value.getText() : "", key, false, view::addOption);
             }
         }
         if (ctx.with_check_option() != null) {

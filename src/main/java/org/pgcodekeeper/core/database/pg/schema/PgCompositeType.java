@@ -176,6 +176,62 @@ public class PgCompositeType extends PgAbstractType implements ICompositeType {
         resetHash();
     }
 
+    /**
+     * Removes an attribute by name, for the
+     * {@code ALTER TYPE ... DROP ATTRIBUTE} of a project file.
+     * <p>
+     * The counterpart of {@link #addAttr(PgColumn)}, and one half of a
+     * statement the tool writes itself - {@link #compareType} emits
+     * {@code DROP ATTRIBUTE} - so without it a migration pgcodekeeper generated
+     * could not be read back.
+     * <p>
+     * A name that matches nothing is left alone rather than reported, as
+     * {@code PgAbstractTable.removeConstraint} leaves one: the caller decides,
+     * because only it knows whether the statement said {@code IF EXISTS}.
+     *
+     * @param name attribute name
+     * @return whether an attribute of that name was there
+     */
+    public boolean removeAttr(String name) {
+        PgColumn attr = getAttr(name);
+        if (attr == null) {
+            return false;
+        }
+        attrs.remove(attr);
+        resetHash();
+        return true;
+    }
+
+    /**
+     * Renames an attribute, keeping its place among the others.
+     * <p>
+     * For {@code ALTER TYPE ... RENAME ATTRIBUTE}, which states content and not
+     * identity: the type it renames an attribute of is the same type, while its
+     * {@code CREATE} would otherwise go on writing the old attribute name.
+     * <p>
+     * The rename is a replacement rather than a mutation because the name of a
+     * statement is final - the same reason {@link PgColumn#renamedCopy(String)}
+     * exists and the reason a table's constraint rename goes through
+     * {@code PgConstraint.renamedCopy}. The place is kept because
+     * {@link #compareUnalterable} reads the attributes as an ordered list, so
+     * moving one to the end would make the comparison rebuild the type.
+     *
+     * @param oldName the attribute to rename
+     * @param newName the name to give it
+     * @return whether an attribute of the old name was there
+     */
+    public boolean renameAttr(String oldName, String newName) {
+        PgColumn attr = getAttr(oldName);
+        if (attr == null) {
+            return false;
+        }
+        PgColumn renamed = attr.renamedCopy(newName);
+        attrs.set(attrs.indexOf(attr), renamed);
+        renamed.setParent(this);
+        resetHash();
+        return true;
+    }
+
     @Override
     public String getAttrType(String attrName) {
         return attrs.stream()

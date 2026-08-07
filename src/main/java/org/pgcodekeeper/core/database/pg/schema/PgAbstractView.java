@@ -54,6 +54,20 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
 
     private String normalizedQuery;
 
+    /**
+     * Catalog-fed column names and {@code format_type} spellings of a
+     * JDBC-loaded view, in {@code attnum} order and without the dropped ones.
+     * A project-side view leaves this {@code null}, which is what routes it
+     * through the sequential analysis-driven initialization instead.
+     * <p>
+     * Besides feeding expression analysis through
+     * {@link #getRelationColumns()}, the names answer the one question a
+     * JDBC-loaded view cannot answer for itself - what its column list would
+     * have said, see {@link #isSameColumnNames}. The types take no part in any
+     * comparison.
+     */
+    private List<Pair<String, String>> relationColumns;
+
     protected PgAbstractView(String name) {
         super(name);
     }
@@ -144,6 +158,23 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
     /**
      * Returns true if either column names or query of the view has been
      * modified.
+     * <p>
+     * Both, and unconditionally: a view is its query, and nothing else here
+     * writes that query out. {@link #appendAlterSQL} carries default values,
+     * owner, privileges, options and comments, so a query this method lets
+     * through leaves no statement behind at all - the script comes out empty
+     * while the diff tree, whose {@link #compare} does read the normalized
+     * query, still shows the view as changed. The query used to be compared
+     * only when neither side spelled its column names out, which made the
+     * explicit column list of a hand-written view enough to lose a rewrite of
+     * its body without a word.
+     * <p>
+     * The answer is a recreate rather than a {@code CREATE OR REPLACE VIEW},
+     * for the same reason it already was one for a view with no column list:
+     * the server accepts a replacement only when the new query yields the same
+     * columns, of the same types, in the same order, and this comparison knows
+     * the query as text - it cannot promise that. A materialized view has no
+     * replacement form at all, and this method serves both.
      *
      * @param newView new view
      * @param settings the settings to use for SQL generation and formatting 
@@ -154,14 +185,60 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
             return true;
         }
 
-        List<String> oldColumnNames = columnNames;
-        List<String> newColumnNames = newView.columnNames;
-
-        if (oldColumnNames.isEmpty() && newColumnNames.isEmpty()) {
-            return !normalizedQuery.equals(newView.normalizedQuery);
+        if (!Objects.equals(normalizedQuery, newView.normalizedQuery)) {
+            return true;
         }
 
-        return !oldColumnNames.equals(newColumnNames);
+        return !isSameColumnNames(newView);
+    }
+
+    /**
+     * Reports whether the two views name their columns the same way.
+     * <p>
+     * The list of {@code CREATE VIEW v (a, b) AS ...} names the output columns
+     * of the query and does nothing else: the server keeps the names on the
+     * columns and {@code pg_get_viewdef} writes them back as aliases inside the
+     * query. So a view read over JDBC never carries a list of its own, and the
+     * two sides used to be compared text against text - a hand-written view
+     * with an explicit column list was recreated on every run, its dependants
+     * with it, measured on PostgreSQL 17.10 against a file whose query text was
+     * already exactly what the catalog prints.
+     * <p>
+     * What the database side does carry is {@link #relationColumns}, the names
+     * the columns actually have. A list that names those very columns, in that
+     * very order, would produce the view that is already there - so it is not a
+     * difference. That is the only relaxation: two project files, neither of
+     * which knows the catalog's columns, are still compared list against list,
+     * and so is a list that names anything else.
+     * <p>
+     * The query is asked separately and always, by both callers. Without it
+     * this would be far too generous: a project list may well rename what the
+     * query returns, and then the query texts differ and the view is recreated
+     * for that.
+     */
+    private boolean isSameColumnNames(PgAbstractView view) {
+        return columnNames.equals(view.columnNames)
+                || namesTheseColumns(view) || view.namesTheseColumns(this);
+    }
+
+    /**
+     * Reports whether this view - the JDBC-loaded one - has exactly the columns
+     * the other one's list names.
+     *
+     * @param project the side that spells a column list out
+     */
+    private boolean namesTheseColumns(PgAbstractView project) {
+        if (relationColumns == null || !columnNames.isEmpty()
+                || project.columnNames.size() != relationColumns.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < relationColumns.size(); i++) {
+            if (!relationColumns.get(i).getFirst().equals(project.columnNames.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -235,6 +312,27 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
     }
 
     /**
+     * Removes an option by name, if the view carries one under that name.
+     * <p>
+     * The counterpart of {@link #addOption(String, String)}, for the
+     * {@code RESET (...)} of {@code ALTER VIEW} and
+     * {@code ALTER MATERIALIZED VIEW}. A file states the options the view ends
+     * up with, so one it resets has to leave the model, or the database keeps
+     * an option the project no longer sets - {@code security_invoker} among
+     * them, which decides whose privileges the query runs with.
+     * <p>
+     * A name that matches nothing is left alone rather than reported, the same
+     * answer {@code PgAbstractTable.removeOption} gives.
+     *
+     * @param option option name, spelled as {@link #addOption} received it
+     */
+    public void removeOption(String option) {
+        if (options.remove(option) != null) {
+            resetHash();
+        }
+    }
+
+    /**
      * Adds a comment to a view column.
      *
      * @param columnName column name
@@ -251,12 +349,37 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
 
     @Override
     public Stream<Pair<String, String>> getRelationColumns() {
-        return null;
+        return relationColumns == null ? null : relationColumns.stream();
     }
 
+    /**
+     * Adds one catalog-fed relation column. Used only by the JDBC views
+     * reader; project loaders leave the columns unset, which routes the view
+     * through the sequential analysis-driven initialization instead.
+     *
+     * @param columnName column name
+     * @param columnType column type produced by {@code pg_catalog.format_type}
+     */
+    public void addRelationColumn(String columnName, String columnType) {
+        if (relationColumns == null) {
+            relationColumns = new ArrayList<>();
+        }
+        relationColumns.add(new Pair<>(columnName, columnType));
+    }
+
+    /**
+     * The column list is deliberately left out.
+     * <p>
+     * {@code Comparison.compare} asks the hash before it asks anything else and
+     * takes a difference it alone can see as a difference in the object, so a
+     * field the comparison may overlook - see {@link #isSameColumnNames} - can
+     * have no place here, or the relaxation would never be reached. Leaving it
+     * out only makes this guard weaker, never wrong: {@code equals} still asks
+     * {@link #compare}, which does compare the lists wherever the catalog has
+     * nothing to say about them.
+     */
     @Override
     public void computeHash(Hasher hasher) {
-        hasher.put(columnNames);
         hasher.put(normalizedQuery);
         hasher.put(columnComments);
         hasher.put(options);
@@ -272,7 +395,7 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
         return obj instanceof PgAbstractView view
                 && super.compare(view)
                 && Objects.equals(normalizedQuery, view.normalizedQuery)
-                && columnNames.equals(view.columnNames)
+                && isSameColumnNames(view)
                 && columnComments.equals(view.columnComments)
                 && options.equals(view.options);
     }
@@ -285,6 +408,9 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
         view.columnNames.addAll(columnNames);
         view.columnComments.putAll(columnComments);
         view.options.putAll(options);
+        if (relationColumns != null) {
+            view.relationColumns = new ArrayList<>(relationColumns);
+        }
         return view;
     }
 

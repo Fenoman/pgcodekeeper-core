@@ -2,7 +2,7 @@ SET search_path = pg_catalog;
 
 DROP TABLE public.t4;
 
-ALTER TABLE public.t5 SET (fillfactor=50);
+ALTER TABLE public.t5 SET (fillfactor='50');
 
 ALTER TABLE public.sales5
 	ALTER COLUMN txn_id SET NOT NULL;
@@ -15,7 +15,7 @@ ALTER TABLE public.sales2
 
 CREATE TABLE public.t4 (
 )
-WITH (appendonly=true, compresstype=zlib);
+WITH (appendonly='true', compresstype=zlib);
 
 ALTER TABLE public.ao1 SET DISTRIBUTED REPLICATED;
 

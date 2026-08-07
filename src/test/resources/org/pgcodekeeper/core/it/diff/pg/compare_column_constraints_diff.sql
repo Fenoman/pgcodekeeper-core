@@ -28,4 +28,4 @@ ALTER TABLE public.testtable3
 	ADD CONSTRAINT uq_nulls UNIQUE (value2);
 
 ALTER TABLE public.testtable3
-	ADD CONSTRAINT uq_nulls1 UNIQUE (value4) WITH (fillfactor=70);
+	ADD CONSTRAINT uq_nulls1 UNIQUE (value4) WITH (fillfactor='70');

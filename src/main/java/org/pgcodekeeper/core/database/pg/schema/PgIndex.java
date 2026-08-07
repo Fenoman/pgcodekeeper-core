@@ -26,7 +26,6 @@ import org.pgcodekeeper.core.database.base.schema.*;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.script.SQLScript;
 import org.pgcodekeeper.core.settings.ISettings;
-import org.pgcodekeeper.core.utils.Utils;
 
 /**
  * PostgreSQL index implementation.
@@ -37,6 +36,16 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
 
     private static final String ALTER_INDEX = "ALTER INDEX ";
 
+    /**
+     * The access method an index gets when its statement names none.
+     * <p>
+     * PostgreSQL has no setting that moves it: measured on 17.10, the only
+     * {@code default_%method%} setting the server carries is
+     * {@code default_table_access_method}, so unlike a table's {@code heap} this
+     * default is a constant of the language rather than of the session.
+     */
+    private static final String DEFAULT_METHOD = "btree";
+
     private final List<SimpleColumn> columns = new ArrayList<>();
     private final List<String> includes = new ArrayList<>();
     private final Map<String, String> options = new LinkedHashMap<>();
@@ -46,6 +55,18 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
     private boolean nullsDistinction = true;
     private boolean unique;
     private String where;
+
+    /**
+     * The predicate as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code SQLLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it - {@code IS}, for one - is still compared as written.
+     * <p>
+     * {@link #where} keeps the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it.
+     */
+    private String whereNormalized;
+
     private boolean isClustered;
     private String tablespace;
 
@@ -64,30 +85,29 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
         appendComments(script);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * An index whose key, method or predicate has changed is not alterable at
+     * all, so this answers {@link ObjectState#RECREATE} and writes nothing -
+     * writing under that answer is writing into a script nobody reads.
+     * {@code DepcyResolver.getObjectState} keeps the script of an
+     * {@link ObjectState#ALTER} and an {@link ObjectState#ALTER_WITH_DEP} and
+     * of no other state, and the one place that rebuilds it,
+     * {@code ActionsToScriptConverter}, throws away what it built for the same
+     * reason. A {@code RECREATE} reaches the migration as a {@code DROP} action
+     * and a {@code CREATE} action instead.
+     * <p>
+     * {@code --concurrently-mode} does not change that, and never did. It is
+     * the {@code CREATE} of the pair that carries the word, see
+     * {@link #getCreationSQL(SQLScript, String)}.
+     */
     @Override
     public ObjectState appendAlterSQL(IStatement newCondition, SQLScript script) {
         int startSize = script.getSize();
         PgIndex newIndex = (PgIndex) newCondition;
 
         if (!compareUnalterable(newIndex) || (null != inherit && !Objects.equals(inherit, newIndex.inherit))) {
-            if (script.getSettings().isConcurrentlyMode()) {
-                // generate optimized command sequence for concurrent index creation
-                String tmpName = "tmp" + Utils.getRandom().nextInt(Integer.MAX_VALUE) + "_" + name;
-                newIndex.getCreationSQL(script, tmpName);
-                script.addStatement("BEGIN TRANSACTION");
-                getDropSQL(script);
-                StringBuilder sql = new StringBuilder();
-                sql.append(ALTER_INDEX)
-                        .append(quote(getSchemaName()))
-                        .append('.')
-                        .append(quote(tmpName))
-                        .append(" RENAME TO ")
-                        .append(getQuotedName());
-                script.addStatement(sql);
-
-                newIndex.appendComments(script);
-                script.addStatement("COMMIT TRANSACTION");
-            }
             return ObjectState.RECREATE;
         }
 
@@ -119,6 +139,20 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
         return getObjectState(script, startSize);
     }
 
+    /**
+     * Writes the {@code CREATE INDEX} of this index, under the name given.
+     * <p>
+     * The one place {@code --concurrently-mode} is honoured, and the whole of
+     * what it means: the index is built without a write lock on the table. A
+     * rebuild is still a {@code DROP} and then this, so the table is left
+     * without the index for the length of the build - and for a {@code UNIQUE}
+     * index, without the guarantee it carries. That is the trade the setting
+     * offers, and the reason it excludes {@code --add-transaction}, which a
+     * {@code CREATE INDEX CONCURRENTLY} cannot run inside.
+     *
+     * @param script the script to write into
+     * @param name   bare name to create the index under
+     */
     private void getCreationSQL(SQLScript script, String name) {
         final StringBuilder sbSQL = new StringBuilder();
         sbSQL.append("CREATE ");
@@ -136,7 +170,7 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
             sbSQL.append("IF NOT EXISTS ");
         }
         sbSQL.append(quote(name)).append(" ON ");
-        if (parent instanceof PgAbstractRegularTable regTable && regTable.getPartitionBy() != null) {
+        if (isOnPartitionedParent() && hasAttachingChildren()) {
             sbSQL.append("ONLY ");
         }
         sbSQL.append(parent.getQualifiedName());
@@ -157,7 +191,40 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
         }
     }
 
+    private boolean isOnPartitionedParent() {
+        return parent instanceof PgAbstractRegularTable regTable && regTable.getPartitionBy() != null;
+    }
+
+    /**
+     * Reports whether an index of a partition will be attached to this one.
+     * <p>
+     * {@code ON ONLY} leaves the index invalid until an index of every partition
+     * has been attached, and those attaches are written only for the partitions
+     * the model holds. Where the model holds none - the partitions live on the
+     * target database and never enter the project - the word would leave behind
+     * an index no plan can use, so a plain recursive {@code CREATE INDEX} is
+     * both correct and what the author meant.
+     * <p>
+     * Deliberately not memoised. The plugin rebuilds its model incrementally, and
+     * a stale answer here would cost far more than the scan: only indexes of a
+     * partitioned parent ask at all, the test is a null check on all but a few,
+     * and it stops at the first match.
+     */
+    private boolean hasAttachingChildren() {
+        Inherits self = new Inherits(getSchemaName(), getName());
+        return getDatabase().getDescendants()
+                .anyMatch(st -> st instanceof PgIndex index && self.equals(index.inherit));
+    }
+
     private void appendSimpleColumns(StringBuilder sbSQL, List<SimpleColumn> columns) {
+        // The grammar requires at least one column here, so an empty list never
+        // reaches this method today - guarded anyway the same way
+        // StatementUtils.appendCols() is, whose unconditional variant once cut
+        // into whatever the caller had written before the opening paren on an
+        // empty collection instead of a trailing ", " that was never written.
+        if (columns.isEmpty()) {
+            return;
+        }
         sbSQL.append(" (");
         for (var col : columns) {
             // column name already quoted
@@ -239,12 +306,55 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
     }
 
     /**
+     * {@inheritDoc}
+     * <p>
+     * PostgreSQL pairs the referenced columns with the index key columns in any order - see
+     * {@code transformFkeyCheckAttrs} - so {@code FOREIGN KEY (x, y) REFERENCES p (b, a)} is backed by a unique index
+     * on {@code (a, b)} just as well as one on {@code (b, a)}. Matching positionally would miss that index and leave
+     * the key out of the dependency graph, which costs the migration the DROP/CREATE pair around a recreated index.
+     */
+    @Override
+    public boolean canBackForeignKey(Collection<String> refs) {
+        if (refs.size() != columns.size()) {
+            return false;
+        }
+        List<String> sortedRefs = new ArrayList<>(refs);
+        List<String> sortedColumns = new ArrayList<>(refs.size());
+        for (SimpleColumn column : columns) {
+            sortedColumns.add(column.getName());
+        }
+        Collections.sort(sortedRefs);
+        Collections.sort(sortedColumns);
+        return sortedRefs.equals(sortedColumns);
+    }
+
+    /**
      * Gets the index access method (btree, hash, gin, gist, etc.).
      *
      * @return index method name
      */
     public String getMethod() {
         return method;
+    }
+
+    /**
+     * The access method the comparison sees: the one the statement names, or
+     * {@link #DEFAULT_METHOD} where it names none.
+     * <p>
+     * {@link #method} keeps {@code null} in the second case, because a project
+     * file must round-trip exactly as its author wrote it and
+     * {@link #getCreationSQL(SQLScript, String)} writes {@code USING} only where
+     * there was one. The database side has no such freedom:
+     * {@code pg_get_indexdef} always prints the method, and
+     * {@code PgIndicesReader} builds its index by handing that text to this
+     * dialect's own {@code CREATE INDEX} parser - so a hand-written
+     * {@code CREATE INDEX i ON t (c)} met {@code btree} from the catalog and
+     * compared unequal to it for ever, rebuilding the index on every deployment.
+     *
+     * @return the access method, never null
+     */
+    private String getComparableMethod() {
+        return method == null ? DEFAULT_METHOD : method;
     }
 
     public void setMethod(String method) {
@@ -272,6 +382,29 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
     public void addOption(String key, String value) {
         options.put(key, value);
         resetHash();
+    }
+
+    /**
+     * Removes a storage parameter by name, if the index carries one under that
+     * name.
+     * <p>
+     * The counterpart of {@link #addOption(String, String)}, for the
+     * {@code ALTER INDEX ... RESET (...)} of a project file. A file states the
+     * parameters the index ends up with, so one it resets has to leave the
+     * model, or the database keeps a parameter the project no longer sets - and
+     * the tool writes the {@code SET} back on the next comparison.
+     * <p>
+     * A name that matches nothing is left alone rather than reported, the same
+     * answer {@code PgAbstractTable.removeOption} gives and the same the server
+     * gives: measured on PostgreSQL 17.10, resetting a parameter that was never
+     * set raises nothing.
+     *
+     * @param option option name, spelled as {@link #addOption} received it
+     */
+    public void removeOption(String option) {
+        if (options.remove(option) != null) {
+            resetHash();
+        }
     }
 
     @Override
@@ -305,8 +438,13 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
         resetHash();
     }
 
-    public void setWhere(String where) {
+    /**
+     * @param where           predicate text as written, used for DDL output
+     * @param whereNormalized the same predicate normalized for comparison
+     */
+    public void setWhere(final String where, final String whereNormalized) {
         this.where = where;
+        this.whereNormalized = whereNormalized;
         resetHash();
     }
 
@@ -324,10 +462,10 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
     public void computeHash(Hasher hasher) {
         hasher.putOrdered(columns);
         hasher.put(unique);
-        hasher.put(where);
+        hasher.put(whereNormalized);
         hasher.put(includes);
         hasher.put(inherit);
-        hasher.put(method);
+        hasher.put(getComparableMethod());
         hasher.put(nullsDistinction);
         hasher.put(isClustered);
         hasher.put(tablespace);
@@ -350,9 +488,9 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
     private boolean compareUnalterable(PgIndex index) {
         return Objects.equals(columns, index.columns)
                 && unique == index.unique
-                && Objects.equals(where, index.where)
+                && Objects.equals(whereNormalized, index.whereNormalized)
                 && Objects.equals(includes, index.includes)
-                && Objects.equals(method, index.method)
+                && getComparableMethod().equals(index.getComparableMethod())
                 && nullsDistinction == index.nullsDistinction;
     }
 
@@ -362,6 +500,7 @@ public class PgIndex extends PgAbstractStatement implements IIndex {
         copy.columns.addAll(columns);
         copy.unique = unique;
         copy.where = where;
+        copy.whereNormalized = whereNormalized;
         copy.includes.addAll(includes);
         copy.inherit = inherit;
         copy.setMethod(method);

@@ -21,6 +21,7 @@ package org.pgcodekeeper.core.database.pg.schema;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +60,15 @@ public class PgSchema extends PgAbstractStatement implements ISchema {
     private final Map<String, PgOperator> operators = new LinkedHashMap<>();
     private final Map<String, PgCollation> collations = new LinkedHashMap<>();
     private final Map<String, PgStatistics> statistics = new LinkedHashMap<>();
+
+    /**
+     * Lazily built schema-wide index-name lookup over all tables and views.
+     * Derived state, not part of hash/compare. Invalidated whenever a table or
+     * view is attached to this schema and whenever an index is added to an
+     * attached container (see {@link PgAbstractStatementContainer}); volatile
+     * publication keeps concurrent readers safe - at worst they rebuild.
+     */
+    private volatile Map<String, PgIndex> indexLookupCache;
 
     /**
      * Creates a new PostgreSQL schema.
@@ -303,6 +313,43 @@ public class PgSchema extends PgAbstractStatement implements ISchema {
     }
 
     /**
+     * Puts a table of another kind where an existing one stands, and hands
+     * everything the old one held over to it.
+     * <p>
+     * For {@code ALTER TABLE ... ATTACH PARTITION} and {@code DETACH}, the one
+     * pair of statements a project file can write that changes a table's class
+     * rather than a field of it: whether a table is a partition is
+     * {@link PgPartitionTable} rather than a flag, and its bound is final. The
+     * move itself is {@link PgAbstractTable#moveInto}, which explains why the
+     * children are moved and not copied.
+     * <p>
+     * The place is kept, which {@code LinkedHashMap.put} gives for nothing on a
+     * key the map already has - the entry is not removed and re-put, which would
+     * move it to the end. The reason is a renamed constraint's: this map's
+     * iteration order is the order a project's {@code CREATE}s are written in.
+     * Recorded as unproven rather than claimed: mutating the {@code put} into a
+     * remove-and-put leaves the whole suite green, so nothing today depends on
+     * it. The index lookup this schema caches is dropped, because it holds the
+     * indexes of the old object.
+     *
+     * @param replacement the table to put there, already carrying the fields of
+     *                    its own kind and nothing else
+     */
+    public void replaceTable(PgAbstractTable replacement) {
+        String key = getNameInCorrectCase(replacement.getName());
+        PgAbstractTable existing = tables.get(key);
+        if (existing == null || existing == replacement) {
+            return;
+        }
+
+        existing.moveInto(replacement);
+        tables.put(key, replacement);
+        replacement.setParent(this);
+        invalidateIndexLookupCache();
+        resetHash();
+    }
+
+    /**
      * Finds view according to specified view {@code name}.
      *
      * @param name name of the view to be searched
@@ -362,10 +409,12 @@ public class PgSchema extends PgAbstractStatement implements ISchema {
 
     private void addView(PgAbstractView st) {
         addUnique(views, st);
+        invalidateIndexLookupCache();
     }
 
     private void addTable(PgAbstractTable st) {
         addUnique(tables, st);
+        invalidateIndexLookupCache();
     }
 
     private void addSequence(PgSequence st) {
@@ -438,10 +487,28 @@ public class PgSchema extends PgAbstractStatement implements ISchema {
      * @return the index with the given name, or null if not found
      */
     public PgIndex getIndexByName(String indexName) {
-        return getStatementContainers()
-                .map(c -> c.getIndex(indexName))
-                .filter(Objects::nonNull)
-                .findAny().orElse(null);
+        Map<String, PgIndex> cache = indexLookupCache;
+        if (cache == null) {
+            cache = buildIndexLookupCache();
+            indexLookupCache = cache;
+        }
+        return cache.get(indexName);
+    }
+
+    /**
+     * Builds the lookup in container iteration order (tables first, then
+     * views) with first-match-wins semantics.
+     */
+    private Map<String, PgIndex> buildIndexLookupCache() {
+        Map<String, PgIndex> cache = new HashMap<>();
+        getStatementContainers().forEach(
+                container -> container.getIndexes().forEach(
+                        index -> cache.putIfAbsent(index.getName(), index)));
+        return cache;
+    }
+
+    void invalidateIndexLookupCache() {
+        indexLookupCache = null;
     }
 
     /**

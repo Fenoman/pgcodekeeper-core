@@ -44,4 +44,17 @@ public interface IIndex extends ISubElement, ISimpleOptionContainer, ISimpleColu
      * @return true if the columns match in order and count
      */
     boolean compareColumns(Collection<String> refs);
+
+    /**
+     * Tells whether this index can back a foreign key that references {@code refs}.
+     * <p>
+     * Defaults to the order-sensitive {@link #compareColumns(Collection)}; dialects whose server matches the
+     * referenced columns against the index key regardless of their order override this.
+     *
+     * @param refs the columns named on the REFERENCES side of a foreign key
+     * @return true if this index is a candidate backing for such a key
+     */
+    default boolean canBackForeignKey(Collection<String> refs) {
+        return compareColumns(refs);
+    }
 }

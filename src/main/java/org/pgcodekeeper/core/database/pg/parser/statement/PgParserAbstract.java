@@ -15,8 +15,10 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.pg.parser.statement;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.TerminalNode;
 import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.api.schema.*;
@@ -27,6 +29,7 @@ import org.pgcodekeeper.core.database.base.parser.statement.ParserAbstract;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
 import org.pgcodekeeper.core.database.base.schema.Argument;
 import org.pgcodekeeper.core.database.base.schema.SimpleColumn;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.schema.*;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
@@ -39,7 +42,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.stream.Collectors;
 
 /**
  * Abstract base class for PostgreSQL statement parsers that provides common
@@ -61,8 +63,8 @@ public abstract class PgParserAbstract extends ParserAbstract<PgDatabase> {
         super(db, settings);
     }
 
-    protected void fillSimpleColumns(ISimpleColumnContainer cont,
-                                     List<Index_columnContext> cols, List<All_opContext> operators) {
+    protected void fillSimpleColumns(ISimpleColumnContainer cont, List<Index_columnContext> cols,
+                                     List<All_opContext> operators, CommonTokenStream stream) {
         // we need this variable for take correct context from List
         int counter = 0;
 
@@ -70,9 +72,11 @@ public abstract class PgParserAbstract extends ParserAbstract<PgDatabase> {
             SimpleColumn simpCol;
             var collate = col.column.collate_identifier();
             if (collate == null) {
-                simpCol = new SimpleColumn(getFullCtxText(col.column));
+                simpCol = new SimpleColumn(getFullCtxText(col.column),
+                        PgParserUtils.normalizeWhitespaceUnquoted(col.column, stream));
             } else {
-                simpCol = new SimpleColumn(getFullCtxText(col.column.vex()));
+                simpCol = new SimpleColumn(getFullCtxText(col.column.vex()),
+                        PgParserUtils.normalizeWhitespaceUnquoted(col.column.vex(0), stream));
                 simpCol.setCollation(getFullCtxText(collate.collation));
                 addDepSafe((AbstractStatement) cont, getIdentifiers(collate.collation), DbObjType.COLLATION);
             }
@@ -153,6 +157,77 @@ public abstract class PgParserAbstract extends ParserAbstract<PgDatabase> {
     }
 
     /**
+     * Processes a single storage parameter, in the one spelling both sides of
+     * the comparison reach.
+     * <p>
+     * A storage parameter is stated twice in different hands. A project file
+     * states it as its author typed it - {@code WITH (fillfactor=70)} - while
+     * the database side arrives through
+     * {@link #fillOptionParams(String[], BiConsumer, boolean, boolean, boolean)},
+     * which quotes every value that is not an identifier, or, for an index,
+     * through {@code pg_get_indexdef}, which quotes it in the server. Read as
+     * written, the two never met: the comparison saw {@code 70} against
+     * {@code '70'}, wrote {@code SET (fillfactor=70)}, and the catalog - which
+     * stores {@code fillfactor=70} either way, measured on 17.10 - came back
+     * unchanged, so the same statement was written again on the next run and on
+     * every run after it. On a {@code PRIMARY KEY} or {@code UNIQUE} constraint,
+     * where the parameters are part of what cannot be altered, the same
+     * difference dropped and added the constraint, rebuilding its index every
+     * time.
+     * <p>
+     * The canonical spelling is the quoted one, because it is the one the tool
+     * already writes for every object it reads from a database and the one
+     * {@code pg_dump} writes; taking the other direction would rewrite every
+     * exported project file instead. The value is first read the way the server
+     * reads it - a quoted literal keeps its text, a bare word is lowered, since
+     * the server's scanner lowers an unquoted word before it reaches
+     * {@code reloptions} (measured: {@code autovacuum_enabled=TRUE} is stored as
+     * {@code true}) - and then quoted by the same rule the database side uses.
+     * So {@code 70}, {@code '70'} and the catalog's own {@code 70} all end at
+     * {@code '70'}, and {@code TRUE}, {@code true} and {@code 'true'} all end at
+     * {@code 'true'}.
+     * <p>
+     * Only storage parameters take this road. A foreign {@code OPTIONS} value is
+     * a string literal on both sides already - the parser reads {@code sconst}
+     * with its quotes, and the readers of those objects pass
+     * {@code forceQuote} - and a text search dictionary's options are read from
+     * the catalog quoted as they were written, so quoting either again would
+     * break a pair that already matches.
+     *
+     * @param value   the option value, as the statement wrote it
+     * @param option  the option name
+     * @param isToast whether this is a TOAST option
+     * @param c       the consumer to receive the key-value pair
+     */
+    public static void fillStorageParam(String value, String option, boolean isToast,
+                                        BiConsumer<String, String> c) {
+        fillOptionParams(canonicalStorageParamValue(value), option, isToast, c);
+    }
+
+    /**
+     * The spelling of a storage parameter value the model holds, whichever side
+     * stated it. See {@link #fillStorageParam(String, String, boolean, BiConsumer)}.
+     *
+     * @param value the value as the statement wrote it, may be null or empty
+     * @return the canonical spelling, null and empty unchanged
+     */
+    public static String canonicalStorageParamValue(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+
+        String content;
+        if (value.length() > 1 && value.charAt(0) == '\'' && value.charAt(value.length() - 1) == '\'') {
+            content = value.substring(1, value.length() - 1).replace("''", "'");
+        } else {
+            content = value.toLowerCase(Locale.ROOT);
+        }
+
+        // the rule the database side is quoted by, applied to the same reading
+        return PgDiffUtils.isValidId(content, false, false) ? content : Utils.quoteString(content);
+    }
+
+    /**
      * Processes a single option parameter.
      *
      * @param value   the option value
@@ -167,6 +242,54 @@ public abstract class PgParserAbstract extends ParserAbstract<PgDatabase> {
             quotedOption = "toast." + quotedOption;
         }
         c.accept(quotedOption, value);
+    }
+
+    /**
+     * The deferrability the two clauses state, in the reading PostgreSQL gives
+     * them, as the one tri-state answer the server can hold: {@code null} when
+     * the object is not deferrable, {@code TRUE} when it is deferrable and
+     * initially immediate, {@code FALSE} when it is deferrable and initially
+     * deferred.
+     * <p>
+     * {@code INITIALLY DEFERRED} implies {@code DEFERRABLE}. The server's own
+     * grammar takes deferrability from either word, so an object declared with
+     * the short spelling reaches the catalog deferrable and comes back out
+     * spelled in full. Measured on 17.10 for a table constraint - inline in a
+     * {@code CREATE TABLE}, in an {@code ADD CONSTRAINT} and after an
+     * {@code ALTER CONSTRAINT} - and again for a {@code CREATE CONSTRAINT
+     * TRIGGER}, where {@code INITIALLY DEFERRED} alone reaches
+     * {@code pg_trigger} as {@code tgdeferrable = t, tginitdeferred = t} and a
+     * lone {@code DEFERRABLE} as {@code t / f}. Without the implication a file
+     * writing either short form and the catalog row that same statement produces
+     * could not compare equal, and no run could change it.
+     * <p>
+     * {@code INITIALLY IMMEDIATE} on its own does not fire it: measured, both
+     * objects stay at {@code f / f}, the same state a statement naming neither
+     * word arrives at.
+     * <p>
+     * {@code NOT DEFERRABLE INITIALLY DEFERRED} is not a fourth state to model.
+     * The server refuses it outright - {@code constraint declared INITIALLY
+     * DEFERRED must be DEFERRABLE}, measured on 17.10 for a table constraint, an
+     * {@code ALTER CONSTRAINT} and a constraint trigger alike - so illegal input
+     * is answered with a state a catalog can hold rather than with one it cannot.
+     * <p>
+     * This returns the reading and writes nothing, because the two objects that
+     * need it store it differently: {@code PgTrigger.isImmediate} is this
+     * tri-state itself, while a {@code PgConstraint} keeps a pair of booleans.
+     * The implication is the part they share, so it is the part that is written
+     * once.
+     *
+     * @param defer the {@code DEFERRABLE} clause, or null if none was written
+     * @param init  the {@code INITIALLY} clause, or null if none was written
+     * @return null when not deferrable, {@code TRUE} for initially immediate,
+     *         {@code FALSE} for initially deferred
+     */
+    protected static Boolean readDeferrability(Table_deferrableContext defer, Table_initialy_immedContext init) {
+        boolean initiallyDeferred = init != null && init.IMMEDIATE() == null;
+        if (!initiallyDeferred && (defer == null || defer.NOT() != null)) {
+            return null;
+        }
+        return !initiallyDeferred;
     }
 
     protected static void fillIncludingDepcy(Including_indexContext incl, AbstractStatement st, String schema, String table) {
@@ -232,13 +355,25 @@ public abstract class PgParserAbstract extends ParserAbstract<PgDatabase> {
             copy.setCodeUnitPositionInLine(cuToken.getCodeUnitPositionInLine() + start);
             copy.setCodeUnitStop(cuToken.getCodeUnitStop() - 1);
 
-            return new Pair<>(PgDiffUtils.unquoteQuotedString(string.getText(), start), copy);
+            return new Pair<>(PgDiffUtils.unquoteQuotedString(text, start), copy);
         }
 
         List<TerminalNode> dollarText = ctx.Text_between_Dollar();
-        String s = dollarText.stream().map(TerminalNode::getText).collect(Collectors.joining());
+        if (dollarText.isEmpty()) {
+            Token closingDelimiter = ctx.EndDollarStringConstant().getSymbol();
+            return new Pair<>("", closingDelimiter);
+        }
 
-        return new Pair<>(s, dollarText.get(0).getSymbol());
+        TerminalNode firstNode = dollarText.get(0);
+        Token firstToken = firstNode.getSymbol();
+        if (dollarText.size() == 1) {
+            return new Pair<>(firstNode.getText(), firstToken);
+        }
+
+        Token lastToken = dollarText.get(dollarText.size() - 1).getSymbol();
+        String text = firstToken.getInputStream().getText(Interval.of(
+                firstToken.getStartIndex(), lastToken.getStopIndex()));
+        return new Pair<>(text, firstToken);
     }
 
     /**

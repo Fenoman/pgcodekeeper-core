@@ -13,7 +13,7 @@ ALTER FOREIGN TABLE public.new_films OPTIONS (ADD schema_name 'public');
 
 DROP FOREIGN TABLE public.old_films;
 
-ALTER TABLE ONLY public.films ALTER COLUMN code SET (n_distinct_inherited=0.5, n_distinct=-1);
+ALTER TABLE ONLY public.films ALTER COLUMN code SET (n_distinct_inherited='0.5', n_distinct='-1');
 
 ALTER FOREIGN TABLE public.films
 	ALTER COLUMN code OPTIONS (SET column_name 'num');

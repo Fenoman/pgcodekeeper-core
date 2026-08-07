@@ -16,16 +16,23 @@
 package org.pgcodekeeper.core.database.pg.parser.statement;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
+import org.pgcodekeeper.core.database.api.schema.IColumn;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation;
 import org.pgcodekeeper.core.database.api.schema.ObjectReference;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.ActionContext;
+import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Col_labelContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Collate_identifierContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Compression_identifierContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Constr_bodyContext;
@@ -39,6 +46,7 @@ import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.IdentifierCo
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Identity_bodyContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Index_columnContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Index_parametersContext;
+import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Like_optionContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.List_of_type_column_defContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Names_in_parensContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Nulls_distinctionContext;
@@ -46,6 +54,7 @@ import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Schema_quali
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Sequence_bodyContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Storage_directiveContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Storage_optionContext;
+import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Storage_parameter_nameContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Storage_parameter_optionContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Storage_parametersContext;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.Table_column_defContext;
@@ -69,6 +78,7 @@ import org.pgcodekeeper.core.database.pg.schema.PgConstraintPk;
 import org.pgcodekeeper.core.database.pg.schema.PgDatabase;
 import org.pgcodekeeper.core.database.pg.schema.PgIndexParamContainer;
 import org.pgcodekeeper.core.database.pg.schema.PgPartitionTable;
+import org.pgcodekeeper.core.database.pg.schema.PgSchema;
 import org.pgcodekeeper.core.database.pg.schema.PgSequence;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
 import org.pgcodekeeper.core.exception.UnresolvedReferenceException;
@@ -83,6 +93,23 @@ import org.pgcodekeeper.core.settings.ISettings;
  * It serves as the foundation for CREATE TABLE and ALTER TABLE parsers.
  */
 public abstract class PgTableAbstract extends PgParserAbstract {
+
+    private static final String COMMENTS = "COMMENTS";
+    private static final String COMPRESSION = "COMPRESSION";
+    private static final String DEFAULTS = "DEFAULTS";
+    private static final String GENERATED = "GENERATED";
+    private static final String IDENTITY = "IDENTITY";
+    private static final String STATISTICS = "STATISTICS";
+    private static final String STORAGE = "STORAGE";
+
+    /**
+     * What {@code INCLUDING ALL} names, which is every word of
+     * {@code like_option} the model has somewhere to put. {@code CONSTRAINTS}
+     * and {@code INDEXES} are the two it deliberately leaves out - see
+     * {@link #fillLikeColumns}.
+     */
+    private static final Set<String> LIKE_ALL = Set.of(
+            COMMENTS, COMPRESSION, DEFAULTS, GENERATED, IDENTITY, STATISTICS, STORAGE);
 
     private final CommonTokenStream stream;
 
@@ -177,7 +204,13 @@ public abstract class PgTableAbstract extends PgParserAbstract {
 
         VexContext def = body.default_expr;
         if (def != null) {
-            col.setDefaultValue(getExpressionText(def, stream));
+            // Same token-level normalization CHECK/EXCLUDE/index predicates and
+            // the trigger WHEN and rule WHERE conditions already get: canonical
+            // whitespace and upper case for the reserved words of the folded
+            // range SQLLexer.ALL..WITH, so a re-cased or re-spaced column
+            // DEFAULT no longer reads as changed.
+            col.setDefaultValue(getExpressionText(def, stream),
+                    PgParserUtils.normalizeWhitespaceUnquoted(def, stream));
             db.addAnalysisLauncher(new PgVexAnalysisLauncher(col, def, fileName));
         } else if (body.NULL() != null) {
             fillColNotNull(col, table, ctx);
@@ -227,7 +260,10 @@ public abstract class PgTableAbstract extends PgParserAbstract {
         } else if (body.GENERATED() != null) {
             col.setGenerationOption(body.STORED() != null ? "STORED" : "VIRTUAL");
             VexContext genExpr = body.vex();
-            col.setDefaultValue(getExpressionText(genExpr, stream));
+            // a generation expression is held in the same field as a DEFAULT and
+            // is normalized the same way, see above
+            col.setDefaultValue(getExpressionText(genExpr, stream),
+                    PgParserUtils.normalizeWhitespaceUnquoted(genExpr, stream));
             db.addAnalysisLauncher(new PgVexAnalysisLauncher(col, genExpr, fileName));
         }
 
@@ -248,6 +284,11 @@ public abstract class PgTableAbstract extends PgParserAbstract {
                         column.collate_identifier(), column.compression_identifier(),
                         column.constraint_common(), column.encoding_identifier(),
                         column.define_foreign_options(), table, schemaName);
+            } else {
+                // the third alternative of table_column_def
+                // (SQLParser.g4:1917-1921), which used to fall past both tests
+                // above and leave the loop body empty
+                fillLikeColumns(colCtx, table);
             }
         }
 
@@ -257,6 +298,142 @@ public abstract class PgTableAbstract extends PgParserAbstract {
                 addInherit(table, getIdentifiers(nameInher));
             }
         }
+    }
+
+    /**
+     * Reads {@code LIKE source_table [ INCLUDING ... ]}, the third alternative
+     * of {@code table_column_def}.
+     * <p>
+     * Left unread it was the worst thing a {@code CREATE TABLE} could say,
+     * because the loop above simply had no branch for it: the table came out of
+     * the parser with zero columns and no dependency on the table it was copied
+     * from. Against a database where those columns exist the comparison then
+     * wrote an {@code ALTER TABLE ... DROP COLUMN} for every one of them,
+     * measured.
+     * <p>
+     * The columns are copied here rather than the clause being remembered,
+     * because that is what the server does: {@code LIKE} is a one-time copy and
+     * leaves no trace in the catalogue, so a {@code pg_dump} of the result
+     * writes the columns out in full. A model that kept the clause instead would
+     * still differ from every database it was compared against.
+     * <p>
+     * What is copied follows the options one at a time. The name, the type and
+     * the collation are unconditional, and so is {@code NOT NULL} - measured on
+     * PostgreSQL 17.10, a bare {@code LIKE} carries it and no option turns it
+     * off. The rest are the six the model holds per column: {@code DEFAULTS},
+     * {@code GENERATED}, {@code IDENTITY}, {@code STORAGE},
+     * {@code COMPRESSION}, {@code STATISTICS} and {@code COMMENTS}.
+     * {@code ALL} names every one of them; {@code EXCLUDING} takes one away,
+     * and the options are read left to right as the server reads them.
+     * <p>
+     * {@code CONSTRAINTS} and {@code INDEXES} are deliberately not copied, and
+     * this is the boundary of the fix rather than an oversight. Both name
+     * objects, and PostgreSQL gives the copies names of its own choosing; the
+     * model cannot predict them, so a copy would either duplicate the source's
+     * name - which makes the {@code CREATE} this model writes illegal - or
+     * invent one, which the comparison would drop and recreate on every run
+     * against the real database. The columns are the part that can be right, and
+     * they are the part whose absence produced a {@code DROP COLUMN}.
+     * <p>
+     * The dependency is registered whether or not the source resolves, because
+     * it is a reference this statement makes; the source has to resolve for the
+     * copy, and an unknown name is reported the way every other unresolved name
+     * is. A source read after this file leaves the table as it was before this
+     * change - empty - and says so.
+     *
+     * @param colCtx the {@code LIKE} element
+     * @param table  the table being defined
+     */
+    private void fillLikeColumns(Table_column_defContext colCtx, PgAbstractTable table) {
+        List<ParserRuleContext> srcIds = getIdentifiers(colCtx.schema_qualified_name());
+        addDepSafe(table, srcIds, DbObjType.TABLE);
+
+        if (ParserListenerMode.REF == getParserMode()) {
+            return;
+        }
+
+        PgAbstractTable src = getSafe(PgSchema::getTable, getSchemaSafe(srcIds),
+                QNameParser.getFirstNameCtx(srcIds));
+
+        Set<String> including = readLikeOptions(colCtx.like_option());
+        for (IColumn column : src.getColumns()) {
+            table.addColumn(copyLikeColumn((PgColumn) column, including, table.getName()));
+        }
+    }
+
+    /**
+     * The set of {@code INCLUDING} words in force after the whole option list
+     * has been read.
+     * <p>
+     * {@code ALL} stands for every word, and the list is applied left to right,
+     * so {@code INCLUDING ALL EXCLUDING DEFAULTS} is every word but that one -
+     * the order the server applies them in.
+     */
+    private static Set<String> readLikeOptions(List<Like_optionContext> options) {
+        Set<String> including = new HashSet<>();
+        for (Like_optionContext option : options) {
+            Set<String> named = option.ALL() != null ? LIKE_ALL
+                    : Set.of(option.getStop().getText().toUpperCase(Locale.ROOT));
+            if (option.INCLUDING() != null) {
+                including.addAll(named);
+            } else {
+                including.removeAll(named);
+            }
+        }
+        return including;
+    }
+
+    /**
+     * A copy of one column of the source under the options in force.
+     * <p>
+     * Built field by field rather than through {@code PgColumn.getCopy}, because
+     * the two answer different questions: a copy carries everything the column
+     * has, while this carries what the statement asked for. The {@code NOT NULL}
+     * is copied as an object of its own, since the model hangs it off the column
+     * and a shared instance would give two tables one constraint.
+     */
+    private static PgColumn copyLikeColumn(PgColumn src, Set<String> including, String tableName) {
+        PgColumn copy = new PgColumn(src.getName());
+        copy.setType(src.getType());
+        copy.setCollation(src.getCollation());
+
+        PgConstraintNotNull notNull = src.getNotNullConstraint();
+        if (notNull != null) {
+            // rebuilt rather than copied, because the copy would otherwise carry
+            // the source's constraint name - a second constraint of that name in
+            // the same schema, which the server refuses. The name here is the
+            // one the model derives for a NOT NULL nobody named, built from this
+            // table rather than the one copied from
+            var copied = new PgConstraintNotNull(tableName, src.getName());
+            copied.setNoInherit(notNull.isNoInherit());
+            copy.setNotNullConstraint(copied);
+            copied.setParent(copy);
+        }
+
+        boolean isGenerated = src.isGenerated();
+        if (including.contains(isGenerated ? GENERATED : DEFAULTS)) {
+            // one field holds both, so which word admits it depends on which
+            // kind the source column is
+            copy.setDefaultValue(src.getDefaultValue(), src.getDefaultValueNormalized());
+            copy.setGenerationOption(src.getGenerationOption());
+        }
+        if (including.contains(IDENTITY)) {
+            copy.setIdentityType(src.getIdentityType());
+            copy.setSequence(src.getSequence());
+        }
+        if (including.contains(STORAGE)) {
+            copy.setStorage(src.getStorage());
+        }
+        if (including.contains(COMPRESSION)) {
+            copy.setCompression(src.getCompression());
+        }
+        if (including.contains(STATISTICS)) {
+            copy.setStatistics(src.getStatistics());
+        }
+        if (including.contains(COMMENTS)) {
+            copy.setComment(src.getComment());
+        }
+        return copy;
     }
 
     protected void addColumn(String columnName, Data_typeContext datatype, Storage_optionContext storage,
@@ -306,6 +483,38 @@ public abstract class PgTableAbstract extends PgParserAbstract {
     protected void addColumn(String columnName, List<Constraint_commonContext> constraints,
             PgAbstractTable table, String schemaName) {
         addColumn(columnName, null, null, null, null, constraints, null, null, table, schemaName);
+    }
+
+    /**
+     * Reads a list of storage parameters into the table.
+     * <p>
+     * Shared by the two statements that carry one - the {@code WITH (...)} of a
+     * {@code CREATE TABLE} and the {@code SET (...)} of an {@code ALTER} - so
+     * that the two spellings build one model. Two of the parameters do not go
+     * into the option map at all and that is what makes sharing the routine
+     * worth more than the six lines it saves: {@code OIDS} is a field of the
+     * table, and a {@code toast.} parameter is held under its prefixed name.
+     *
+     * @param options the parameters the statement lists
+     * @param table   the table they are stated of
+     */
+    protected void parseOptions(List<Storage_parameter_optionContext> options, PgAbstractTable table) {
+        for (Storage_parameter_optionContext option : options) {
+            Storage_parameter_nameContext key = option.storage_parameter_name();
+            List<Col_labelContext> optionIds = key.col_label();
+            VexContext valueCtx = option.vex();
+            String value = valueCtx == null ? "" : valueCtx.getText();
+            String optionText = key.getText();
+            if ("OIDS".equalsIgnoreCase(optionText)) {
+                if ("TRUE".equalsIgnoreCase(value) || "'TRUE'".equalsIgnoreCase(value)) {
+                    table.setHasOids(true);
+                }
+            } else if ("toast".equals(QNameParser.getSecondName(optionIds))) {
+                fillStorageParam(value, QNameParser.getFirstName(optionIds), true, table::addOption);
+            } else {
+                fillStorageParam(value, optionText, false, table::addOption);
+            }
+        }
     }
 
     protected void addInherit(PgAbstractTable table, List<ParserRuleContext> idsInh) {
@@ -475,7 +684,7 @@ public abstract class PgTableAbstract extends PgParserAbstract {
         if (colName != null) {
             constrPk.addColumn(colName);
             constrPk.addDependency(new ObjectReference(schemaName, tableName, colName, DbObjType.COLUMN));
-        } else {
+        } else if (body.col_overlaps != null) {
             var cols = body.col_overlaps;
             for (Schema_qualified_nameContext name : cols.schema_qualified_name()) {
                 String columnName = QNameParser.getFirstName(getIdentifiers(name));
@@ -489,15 +698,25 @@ public abstract class PgTableAbstract extends PgParserAbstract {
                 constrPk.setWithoutOverlapsColumn(withoutOverlaps);
             }
         }
+        // else: a column list is optional in the grammar because "PRIMARY KEY/UNIQUE
+        // USING INDEX <name>" adopts an existing index instead of listing columns of
+        // its own - same "USING INDEX has two shapes" case handled in fillParam() below,
+        // just one statement earlier. There is nothing to fill in here either.
 
         fillParam(constrPk, body.index_parameters(), schemaName, tableName);
     }
 
     private void fillConstrCheck(PgConstraintCheck constrCheck, Constr_bodyContext constrBody, boolean isNeedParens) {
-        String expr = (isNeedParens ? "(" : "") +
-                getFullCtxText(constrBody.expression) +
-                (isNeedParens ? ")" : "");
-        constrCheck.setExpression(expr);
+        String open = isNeedParens ? "(" : "";
+        String close = isNeedParens ? ")" : "";
+        // The parens are part of the text on both sides, so they have to wrap
+        // the normalized form as well - otherwise one side carries them and the
+        // other does not, and every CHECK looks changed.
+        String expr = open + getFullCtxText(constrBody.expression) + close;
+        String normalized = open
+                + PgParserUtils.normalizeWhitespaceUnquoted(constrBody.expression, stream)
+                + close;
+        constrCheck.setExpression(expr, normalized);
         constrCheck.setInherit(constrBody.inherit_option() == null);
     }
 
@@ -506,10 +725,11 @@ public abstract class PgTableAbstract extends PgParserAbstract {
         if (body.index_method != null) {
             constrExcl.setIndexMethod(body.index_method.getText());
         }
-        fillSimpleColumns(constrExcl, body.index_column(), body.all_op());
+        fillSimpleColumns(constrExcl, body.index_column(), body.all_op(), stream);
         fillParam(constrExcl, body.index_parameters(), schemaName, tableName);
         if (body.where != null) {
-            constrExcl.setPredicate(getFullCtxText(body.exp));
+            constrExcl.setPredicate(getFullCtxText(body.exp),
+                    PgParserUtils.normalizeWhitespaceUnquoted(body.exp, stream));
         }
     }
 
@@ -526,12 +746,24 @@ public abstract class PgTableAbstract extends PgParserAbstract {
             if (stParams != null && !stParams.isEmpty()) {
                 for (var stParam : stParams.storage_parameters().storage_parameter_option()) {
                     var value = stParam.vex();
-                    constr.addParam(stParam.storage_parameter_name().getText(), value != null ? value.getText() : null);
+                    constr.addParam(stParam.storage_parameter_name().getText(),
+                            canonicalStorageParamValue(value != null ? value.getText() : null));
                 }
             }
         }
-        if (parameters.USING() != null) {
+        // USING INDEX has two shapes and only one of them is a tablespace.
+        // "USING INDEX <name>" adopts an existing index; PostgreSQL reports the
+        // resulting key as an ordinary one afterwards and pg_dump writes it as
+        // ordinary too, so the adopted name carries no meaning for comparison -
+        // but the constraint's own getDefinition() still needs it to regenerate
+        // a statement PostgreSQL accepts, since a bare "PRIMARY KEY"/"UNIQUE"
+        // with neither a column list nor an adopted index is a syntax error.
+        // Asking USING() and then dereferencing table_space() on the other shape
+        // used to lose the whole statement to a swallowed NPE.
+        if (parameters.table_space() != null) {
             constr.setTablespace(parameters.table_space().identifier().getText());
+        } else if (parameters.schema_qualified_name() != null && constr instanceof PgConstraintPk pk) {
+            pk.setUsingIndexName(QNameParser.getFirstName(getIdentifiers(parameters.schema_qualified_name())));
         }
     }
 
@@ -546,11 +778,34 @@ public abstract class PgTableAbstract extends PgParserAbstract {
     }
 
     private static void appendConstrCommon(Constraint_commonContext ctx, PgConstraint constr) {
-        Table_deferrableContext defer = ctx.table_deferrable();
-        constr.setDeferrable(defer != null && defer.NOT() == null);
-        Table_initialy_immedContext init = ctx.table_initialy_immed();
-        constr.setInitially(init != null && init.IMMEDIATE() == null);
+        setDeferrability(constr, ctx.table_deferrable(), ctx.table_initialy_immed());
         Table_enforcedContext enf = ctx.table_enforced();
         constr.setNotEnforced(enf != null && enf.NOT() != null);
+    }
+
+    /**
+     * Deferrability as a constraint stores it - a pair of booleans - out of the
+     * one reading of the two clauses that
+     * {@link PgParserAbstract#readDeferrability} gives them. One method rather
+     * than one per statement because the same two clauses are written in three
+     * places here - inline beside a column, after a table constraint, and on an
+     * {@code ALTER CONSTRAINT} - and a second copy of the formula is a second
+     * answer waiting to happen: the two spellings of one constraint have to
+     * build one model.
+     * <p>
+     * The pair is the constraint's own encoding of the three states the server
+     * holds, and it can spell a fourth the server refuses. That is why the
+     * implication itself lives one level up, where the constraint trigger reads
+     * it too, and only the encoding is written here.
+     *
+     * @param constr the constraint the clauses are stated of
+     * @param defer  the {@code DEFERRABLE} clause, or null if none was written
+     * @param init   the {@code INITIALLY} clause, or null if none was written
+     */
+    protected static void setDeferrability(PgConstraint constr, Table_deferrableContext defer,
+                                           Table_initialy_immedContext init) {
+        Boolean immediate = readDeferrability(defer, init);
+        constr.setDeferrable(immediate != null);
+        constr.setInitially(Boolean.FALSE.equals(immediate));
     }
 }
