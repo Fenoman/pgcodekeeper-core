@@ -37,6 +37,19 @@ public class PgStatistics extends PgAbstractStatement implements IStatistics, IS
     private final List<String> kinds = new ArrayList<>();
     private final List<String> expressions = new ArrayList<>();
 
+    /**
+     * Normalized form of each {@link #expressions} entry, at the same index: the
+     * same tokens with canonical spacing, and the reserved words of the folded
+     * range {@code SQLLexer.ALL..WITH} raised to upper case. Only that range
+     * folds, so a word outside it - {@code IS}, for one - is still compared as
+     * written.
+     * <p>
+     * Used only for comparison and hashing; {@link #expressions} keeps the text
+     * the DDL is written from. Always added together with the entry it mirrors,
+     * see {@link #addExpr(String, String)}.
+     */
+    private final List<String> expressionsNormalized = new ArrayList<>();
+
     private int statistics = -1;
     private String foreignSchema;
     private String foreignTable;
@@ -122,12 +135,15 @@ public class PgStatistics extends PgAbstractStatement implements IStatistics, IS
     }
 
     /**
-     * Adds a column expression for statistics collection.
+     * Adds a column or expression for statistics collection, together with
+     * its normalized form used for comparison.
      *
-     * @param expression column name or expression
+     * @param expression           column name or expression text as written, used for DDL output
+     * @param expressionNormalized the same expression normalized for comparison
      */
-    public void addExpr(String expression) {
+    public void addExpr(String expression, String expressionNormalized) {
         expressions.add(expression);
+        expressionsNormalized.add(expressionNormalized);
         resetHash();
     }
 
@@ -142,7 +158,7 @@ public class PgStatistics extends PgAbstractStatement implements IStatistics, IS
     @Override
     public void computeHash(Hasher hasher) {
         hasher.put(kinds);
-        hasher.put(expressions);
+        hasher.put(expressionsNormalized);
         hasher.put(foreignSchema);
         hasher.put(foreignTable);
         hasher.put(statistics);
@@ -160,7 +176,7 @@ public class PgStatistics extends PgAbstractStatement implements IStatistics, IS
 
     private boolean compareUnalterable(PgStatistics stat) {
         return Objects.equals(kinds, stat.kinds)
-                && Utils.setLikeEquals(expressions, stat.expressions)
+                && Utils.setLikeEquals(expressionsNormalized, stat.expressionsNormalized)
                 && Objects.equals(stat.foreignSchema, foreignSchema)
                 && Objects.equals(stat.foreignTable, foreignTable);
     }
@@ -170,6 +186,7 @@ public class PgStatistics extends PgAbstractStatement implements IStatistics, IS
         PgStatistics stat = new PgStatistics(name);
         stat.kinds.addAll(kinds);
         stat.expressions.addAll(expressions);
+        stat.expressionsNormalized.addAll(expressionsNormalized);
         stat.setForeignSchema(foreignSchema);
         stat.setForeignTable(foreignTable);
         stat.setStatistics(statistics);

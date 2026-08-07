@@ -60,7 +60,7 @@ public final class ChCustomParserListener extends CustomParserListener<ChDatabas
             if (createCtx != null) {
                 create(createCtx, stream);
             } else if ((alter = ddlStmt.alter_stmt()) != null) {
-                alter(alter);
+                alter(alter, stream);
             } else if ((dropCtx = ddlStmt.drop_stmt()) != null) {
                 drop(dropCtx);
             } else if ((privilStmt = ddlStmt.privilegy_stmt()) != null) {
@@ -85,19 +85,19 @@ public final class ChCustomParserListener extends CustomParserListener<ChDatabas
         if ((createDatabase = ctx.create_database_stmt()) != null) {
             p = new ChCreateSchema(createDatabase, db, getSettings());
         } else if ((createTable = ctx.create_table_stmt()) != null) {
-            p = new ChCreateTable(createTable, db, getSettings());
+            p = new ChCreateTable(createTable, db, stream, getSettings());
         } else if ((createView = ctx.create_view_stmt()) != null) {
             p = new ChCreateView(createView, db, stream, getSettings());
         } else if ((createFunc = ctx.create_function_stmt()) != null) {
-            p = new ChCreateFunction(createFunc, db, getSettings());
+            p = new ChCreateFunction(createFunc, db, stream, getSettings());
         } else if ((createUser = ctx.create_user_stmt()) != null) {
             p = new ChCreateUser(createUser, db, getSettings());
         } else if ((createRole = ctx.create_role_stmt()) != null) {
             p = new ChCreateRole(createRole, db, getSettings());
         } else if (ctx.create_policy_stmt() != null) {
-            p = new ChCreatePolicy(ctx.create_policy_stmt(), db, getSettings());
+            p = new ChCreatePolicy(ctx.create_policy_stmt(), db, stream, getSettings());
         } else if ((createDictionary = ctx.create_dictinary_stmt()) != null) {
-            p = new ChCreateDictionary(createDictionary, db, getSettings());
+            p = new ChCreateDictionary(createDictionary, db, stream, getSettings());
         } else {
             addToQueries(ctx, getAction(ctx));
             return;
@@ -123,11 +123,11 @@ public final class ChCustomParserListener extends CustomParserListener<ChDatabas
         safeParseStatement(p, ctx);
     }
 
-    private void alter(Alter_stmtContext ctx) {
+    private void alter(Alter_stmtContext ctx, CommonTokenStream stream) {
         ChParserAbstract p;
         Alter_table_stmtContext altertableCtx = ctx.alter_table_stmt();
         if (altertableCtx != null) {
-            p = new ChAlterTable(altertableCtx, db, getSettings());
+            p = new ChAlterTable(altertableCtx, db, stream, getSettings());
         } else if (ctx.alter_policy_stmt() != null
                 || ctx.alter_user_stmt() != null
                 || ctx.alter_role_stmt() != null) {

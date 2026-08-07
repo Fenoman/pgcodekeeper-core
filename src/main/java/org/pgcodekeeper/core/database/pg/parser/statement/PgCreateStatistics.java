@@ -21,6 +21,7 @@ import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgStatisticsAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.schema.*;
@@ -87,7 +88,7 @@ public final class PgCreateStatistics extends PgParserAbstract {
         stat.setForeignTable(QNameParser.getFirstName(tableIds));
 
         for (VexContext vex : ctx.vex()) {
-            stat.addExpr(getExpressionText(vex, stream));
+            stat.addExpr(getExpressionText(vex, stream), PgParserUtils.normalizeWhitespaceUnquoted(vex, stream));
             db.addAnalysisLauncher(new PgStatisticsAnalysisLauncher(stat, vex, fileName));
         }
 

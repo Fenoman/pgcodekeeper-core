@@ -68,8 +68,11 @@ public final class ChRelationsReader extends AbstractSearchPathJdbcReader<ChJdbc
         loader.setCurrentObject(new ObjectReference(schema.getName(), name, DbObjType.DICTIONARY));
         ChDictionary dict = new ChDictionary(name);
         loader.submitChAntlrTask(definition,
-                p -> p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_dictinary_stmt(),
-                ctx -> new ChCreateDictionary(ctx, (ChDatabase) schema.getDatabase(), loader.getSettings())
+                p -> new Pair<>(
+                        p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_dictinary_stmt(),
+                        (CommonTokenStream) p.getTokenStream()),
+                pair -> new ChCreateDictionary(pair.getFirst(), (ChDatabase) schema.getDatabase(),
+                        pair.getSecond(), loader.getSettings())
                         .parseObject(dict));
         return dict;
     }
@@ -96,8 +99,11 @@ public final class ChRelationsReader extends AbstractSearchPathJdbcReader<ChJdbc
             table = new ChTable(name);
         }
         loader.submitChAntlrTask(definition,
-                p -> p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_table_stmt(),
-                ctx -> new ChCreateTable(ctx, (ChDatabase) schema.getDatabase(), loader.getSettings())
+                p -> new Pair<>(
+                        p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_table_stmt(),
+                        (CommonTokenStream) p.getTokenStream()),
+                pair -> new ChCreateTable(pair.getFirst(), (ChDatabase) schema.getDatabase(),
+                        pair.getSecond(), loader.getSettings())
                         .parseObject(table));
         return table;
     }

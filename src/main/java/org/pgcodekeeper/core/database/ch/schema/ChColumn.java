@@ -41,8 +41,26 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
     private String collation;
     private boolean notNull;
     private String defaultValue;
+
+    /**
+     * The default as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it is still compared as written.
+     * <p>
+     * {@link #defaultValue} keeps the text the DDL is written from, because a
+     * project file must round-trip exactly as its author wrote it.
+     */
+    private String defaultValueNormalized;
+
     private String defaultType;
     private String ttl;
+
+    /**
+     * The TTL as the comparison sees it, see {@link #defaultValueNormalized}.
+     */
+    private String ttlNormalized;
+
     private String option;
 
     /**
@@ -120,7 +138,7 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         compareTypes(newColumn, script);
         compareDefaults(newColumn, script);
         compareCodecs(newColumn.codecs, script);
-        compareTtl(newColumn.ttl, newColumn.type, script);
+        compareTtl(newColumn, script);
         compareComment(newColumn.comment, script);
         return getObjectState(script, startSize);
     }
@@ -138,7 +156,7 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
 
     private void compareDefaults(ChColumn newColumn, SQLScript script) {
         if (Objects.equals(defaultType, newColumn.defaultType)
-                && Objects.equals(defaultValue, newColumn.defaultValue)) {
+                && Objects.equals(defaultValueNormalized, newColumn.defaultValueNormalized)) {
             return;
         }
         ISettings settings = script.getSettings();
@@ -180,16 +198,16 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         script.addStatement(sb);
     }
 
-    private void compareTtl(String newTtl, String newType, SQLScript script) {
-        if (Objects.equals(ttl, newTtl)) {
+    private void compareTtl(ChColumn newColumn, SQLScript script) {
+        if (Objects.equals(ttlNormalized, newColumn.ttlNormalized)) {
             return;
         }
         StringBuilder sb = new StringBuilder();
         appendAlterColumn(sb, script.getSettings());
-        if (newTtl == null) {
+        if (newColumn.ttl == null) {
             sb.append(" REMOVE TTL");
         } else {
-            sb.append(' ').append(newType).append(" TTL ").append(newTtl);
+            sb.append(' ').append(newColumn.type).append(" TTL ").append(newColumn.ttl);
         }
         script.addStatement(sb);
     }
@@ -250,13 +268,14 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         return ((ChTable) parent).getAlterTable();
     }
 
-    public void setDefaultValue(final String defaultValue) {
+    /**
+     * @param defaultValue           default text as written, used for DDL output
+     * @param defaultValueNormalized the same default normalized for comparison
+     */
+    public void setDefaultValue(final String defaultValue, final String defaultValueNormalized) {
         this.defaultValue = defaultValue;
+        this.defaultValueNormalized = defaultValueNormalized;
         resetHash();
-    }
-
-    public String getDefaultValue() {
-        return defaultValue;
     }
 
     public void setNotNull(final boolean notNull) {
@@ -300,8 +319,13 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         resetHash();
     }
 
-    public void setTtl(String ttl) {
+    /**
+     * @param ttl           TTL text as written, used for DDL output
+     * @param ttlNormalized the same TTL normalized for comparison
+     */
+    public void setTtl(String ttl, String ttlNormalized) {
         this.ttl = ttl;
+        this.ttlNormalized = ttlNormalized;
         resetHash();
     }
 
@@ -320,10 +344,10 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         hasher.put(type);
         hasher.put(collation);
         hasher.put(notNull);
-        hasher.put(defaultValue);
+        hasher.put(defaultValueNormalized);
         hasher.put(defaultType);
         hasher.put(option);
-        hasher.put(ttl);
+        hasher.put(ttlNormalized);
         hasher.put(codecs);
     }
 
@@ -337,10 +361,10 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
                 && Objects.equals(type, column.type)
                 && Objects.equals(collation, column.collation)
                 && notNull == column.notNull
-                && Objects.equals(defaultValue, column.defaultValue)
+                && Objects.equals(defaultValueNormalized, column.defaultValueNormalized)
                 && Objects.equals(defaultType, column.defaultType)
                 && Objects.equals(option, column.option)
-                && Objects.equals(ttl, column.ttl)
+                && Objects.equals(ttlNormalized, column.ttlNormalized)
                 && Objects.equals(codecs, column.codecs);
     }
 
@@ -350,10 +374,10 @@ public class ChColumn extends ChAbstractStatement implements IColumn {
         column.setType(type);
         column.setCollation(collation);
         column.setNotNull(notNull);
-        column.setDefaultValue(defaultValue);
+        column.setDefaultValue(defaultValue, defaultValueNormalized);
         column.setDefaultType(defaultType);
         column.setOption(option);
-        column.setTtl(ttl);
+        column.setTtl(ttl, ttlNormalized);
         column.codecs.addAll(codecs);
         return column;
     }

@@ -177,7 +177,7 @@ public abstract class MsParserAbstract extends ParserAbstract<MsDatabase> {
             }
             var columns = constraintCtx.column_name_list_with_order();
             if (columns == null) {
-                constrPk.addColumn(new SimpleColumn(col.getName()));
+                constrPk.addColumn(new SimpleColumn(col.getName(), null));
             } else {
                 fillColumns(constrPk, columns.column_with_order(), null, null);
             }
@@ -278,7 +278,7 @@ public abstract class MsParserAbstract extends ParserAbstract<MsDatabase> {
             index.setClustered(option.clustered() != null && option.clustered().CLUSTERED() != null);
 
             if (option.index_sort() == null) {
-                index.addColumn(new SimpleColumn(col.getName()));
+                index.addColumn(new SimpleColumn(col.getName(), null));
             } else {
                 fillColumns(index, option.index_sort().column_name_list_with_order().column_with_order(), null, null);
             }
@@ -323,7 +323,7 @@ public abstract class MsParserAbstract extends ParserAbstract<MsDatabase> {
         SimpleColumn simpCol;
         for (var col : cols) {
             var name = col.id().getText();
-            simpCol = new SimpleColumn(name);
+            simpCol = new SimpleColumn(name, null);
             var orderCtx = col.asc_desc();
             simpCol.setDesc(orderCtx != null && orderCtx.DESC() != null);
             stmt.addColumn(simpCol);

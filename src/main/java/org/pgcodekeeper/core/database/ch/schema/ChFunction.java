@@ -34,6 +34,21 @@ public class ChFunction extends ChAbstractStatement {
     private String body;
 
     /**
+     * The body as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it is still compared as written - {@code INTERVAL} and the
+     * time unit after it, which a lambda body can well contain, both sit
+     * outside it.
+     * <p>
+     * {@link #body} keeps the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it. The pair is filled by
+     * one two-argument setter, so a caller cannot supply one half and forget the
+     * other.
+     */
+    private String bodyNormalized;
+
+    /**
      * Creates a new ClickHouse function with the specified name.
      *
      * @param name the name of the function
@@ -72,16 +87,12 @@ public class ChFunction extends ChAbstractStatement {
     }
 
     /**
-     * Returns the function body expression.
-     *
-     * @return the function body
+     * @param body           the body text as written, used for DDL output
+     * @param bodyNormalized the same body normalized for comparison
      */
-    public String getBody() {
-        return body;
-    }
-
-    public void setBody(String body) {
+    public void setBody(String body, String bodyNormalized) {
         this.body = body;
+        this.bodyNormalized = bodyNormalized;
         resetHash();
     }
 
@@ -101,7 +112,7 @@ public class ChFunction extends ChAbstractStatement {
 
     @Override
     public void computeHash(Hasher hasher) {
-        hasher.put(body);
+        hasher.put(bodyNormalized);
         hasher.putOrdered(arguments);
     }
 
@@ -116,7 +127,7 @@ public class ChFunction extends ChAbstractStatement {
     }
 
     private boolean compareUnalterable(ChFunction newFunc) {
-        return Objects.equals(body, newFunc.getBody())
+        return Objects.equals(bodyNormalized, newFunc.bodyNormalized)
                 && arguments.equals(newFunc.arguments);
     }
 
@@ -126,7 +137,7 @@ public class ChFunction extends ChAbstractStatement {
         for (Argument argSrc : arguments) {
             copy.addArgument(argSrc.getCopy());
         }
-        copy.setBody(body);
+        copy.setBody(body, bodyNormalized);
         return copy;
     }
 }

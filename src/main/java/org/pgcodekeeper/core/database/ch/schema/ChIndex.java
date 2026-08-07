@@ -37,6 +37,18 @@ public class ChIndex extends ChAbstractStatement implements IIndex {
     private boolean unique;
     private boolean isClustered;
     private String expr;
+
+    /**
+     * The expression as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it is still compared as written.
+     * <p>
+     * {@link #expr} keeps the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it.
+     */
+    private String exprNormalized;
+
     private String type;
     private int granVal = 1;
 
@@ -163,8 +175,13 @@ public class ChIndex extends ChAbstractStatement implements IIndex {
         resetHash();
     }
 
-    public void setExpr(String expr) {
+    /**
+     * @param expr           expression text as written, used for DDL output
+     * @param exprNormalized the same expression normalized for comparison
+     */
+    public void setExpr(String expr, String exprNormalized) {
         this.expr = expr;
+        this.exprNormalized = exprNormalized;
         resetHash();
     }
 
@@ -180,7 +197,7 @@ public class ChIndex extends ChAbstractStatement implements IIndex {
 
     @Override
     public void computeHash(Hasher hasher) {
-        hasher.put(expr);
+        hasher.put(exprNormalized);
         hasher.put(type);
         hasher.put(granVal);
         hasher.putOrdered(columns);
@@ -206,7 +223,7 @@ public class ChIndex extends ChAbstractStatement implements IIndex {
     }
 
     protected boolean compareUnalterable(ChIndex index) {
-        return Objects.equals(expr, index.expr)
+        return Objects.equals(exprNormalized, index.exprNormalized)
                 && Objects.equals(type, index.type)
                 && granVal == index.granVal
                 && Objects.equals(columns, index.columns)
@@ -218,7 +235,7 @@ public class ChIndex extends ChAbstractStatement implements IIndex {
     @Override
     protected ChIndex getCopy() {
         var index = new ChIndex(name);
-        index.setExpr(expr);
+        index.setExpr(expr, exprNormalized);
         index.setType(type);
         index.setGranVal(granVal);
         index.columns.addAll(columns);

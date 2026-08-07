@@ -17,9 +17,11 @@ package org.pgcodekeeper.core.database.pg.parser.statement;
 
 import java.util.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgRuleAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.schema.*;
@@ -36,17 +38,21 @@ import org.pgcodekeeper.core.utils.Utils;
  */
 public final class PgCreateRule extends PgParserAbstract {
     private final Create_rewrite_statementContext ctx;
+    private final CommonTokenStream stream;
 
     /**
      * Constructs a new CreateRule parser.
      *
      * @param ctx      the CREATE RULE statement context
      * @param db       the PostgreSQL database object
+     * @param stream   the token stream for parsing
      * @param settings the ISettings object
      */
-    public PgCreateRule(Create_rewrite_statementContext ctx, PgDatabase db, ISettings settings) {
+    public PgCreateRule(Create_rewrite_statementContext ctx, PgDatabase db, CommonTokenStream stream,
+                        ISettings settings) {
         super(db, settings);
         this.ctx = ctx;
+        this.stream = stream;
     }
 
     @Override
@@ -60,16 +66,40 @@ public final class PgCreateRule extends PgParserAbstract {
             rule.setInstead(true);
         }
 
-        setConditionAndAddCommands(ctx, rule, db, fileName, settings);
+        setConditionAndAddCommands(ctx, rule, db, fileName, stream, settings);
 
         ParserRuleContext parent = QNameParser.getFirstNameCtx(ids);
         IStatementContainer cont = getSafe(ISchema::getStatementContainer, getSchemaSafe(ids), parent);
         addSafe(cont, rule, Arrays.asList(QNameParser.getSchemaNameCtx(ids), parent, ctx.name));
     }
 
-    public static void setConditionAndAddCommands(Create_rewrite_statementContext ctx,
-                                                  PgRule rule, IDatabase db, String location, ISettings settings) {
-        rule.setCondition((ctx.WHERE() != null) ? getFullCtxText(ctx.vex()) : null);
+    /**
+     * Sets the rule condition and its action commands.
+     * <p>
+     * This is the single parsing point shared by both rule sources - the
+     * project-side {@code CREATE RULE} parser and the JDBC catalog reader
+     * re-parsing a {@code pg_get_ruledef()} result - so the normalized form of
+     * the condition is computed identically regardless of which one called in.
+     *
+     * @param ctx      the CREATE RULE statement context
+     * @param rule     the rule object to configure
+     * @param db       the database for analysis launchers
+     * @param location the source location for error reporting
+     * @param stream   the token stream that produced {@code ctx}, used to build
+     *                 the normalized comparison form of the condition
+     * @param settings the ISettings object
+     */
+    public static void setConditionAndAddCommands(Create_rewrite_statementContext ctx, PgRule rule, IDatabase db,
+                                                  String location, CommonTokenStream stream, ISettings settings) {
+        VexContext vex = (ctx.WHERE() != null) ? ctx.vex() : null;
+        // Same token-level normalization CHECK/EXCLUDE/index predicates and the
+        // trigger WHEN condition already get: canonical whitespace and upper
+        // case for the reserved words of the folded range SQLLexer.ALL..WITH, so
+        // a re-cased or re-spaced rule condition no longer reads as changed.
+        // The action commands below stay raw on both halves - they are a much
+        // larger surface and out of this scope.
+        rule.setCondition(vex == null ? null : getFullCtxText(vex),
+                vex == null ? null : PgParserUtils.normalizeWhitespaceUnquoted(vex, stream));
 
         // allows to write a common namespace-setup code with no copy-paste for each cmd type
         for (Rewrite_commandContext cmd : ctx.rewrite_command()) {

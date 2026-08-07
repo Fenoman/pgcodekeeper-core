@@ -17,6 +17,7 @@ package org.pgcodekeeper.core.database.ch.parser.statement;
 
 import java.util.List;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
@@ -39,10 +40,12 @@ public final class ChCreateFunction extends ChParserAbstract {
      *
      * @param ctx      the ANTLR parse tree context for the CREATE FUNCTION statement
      * @param db       the ClickHouse database schema being processed
+     * @param stream   the token stream for expression normalization
      * @param settings parsing configuration settings
      */
-    public ChCreateFunction(Create_function_stmtContext ctx, ChDatabase db, ISettings settings) {
-        super(db, settings);
+    public ChCreateFunction(Create_function_stmtContext ctx, ChDatabase db, CommonTokenStream stream,
+                            ISettings settings) {
+        super(db, stream, settings);
         this.ctx = ctx;
     }
 
@@ -64,7 +67,7 @@ public final class ChCreateFunction extends ChParserAbstract {
      */
     public void parseObject(ChFunction function) {
         var bodyCtx = ctx.lambda_expr().expr();
-        function.setBody(getFullCtxText(bodyCtx));
+        function.setBody(getFullCtxText(bodyCtx), normalize(bodyCtx));
 
         parseArgs(function, ctx.lambda_expr().function_arguments());
 

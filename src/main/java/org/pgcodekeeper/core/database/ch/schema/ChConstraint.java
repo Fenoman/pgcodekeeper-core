@@ -37,6 +37,17 @@ public class ChConstraint extends ChAbstractStatement implements IConstraint {
     private String expr;
 
     /**
+     * The expression as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it is still compared as written.
+     * <p>
+     * {@link #expr} keeps the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it.
+     */
+    private String exprNormalized;
+
+    /**
      * Creates a new ClickHouse constraint.
      *
      * @param name     the name of the constraint
@@ -47,8 +58,13 @@ public class ChConstraint extends ChAbstractStatement implements IConstraint {
         this.isAssume = isAssume;
     }
 
-    public void setExpr(String expr) {
+    /**
+     * @param expr           expression text as written, used for DDL output
+     * @param exprNormalized the same expression normalized for comparison
+     */
+    public void setExpr(String expr, String exprNormalized) {
         this.expr = expr;
+        this.exprNormalized = exprNormalized;
         resetHash();
     }
 
@@ -128,7 +144,7 @@ public class ChConstraint extends ChAbstractStatement implements IConstraint {
     public void computeHash(Hasher hasher) {
         hasher.put(isNotValid);
         hasher.put(isAssume);
-        hasher.put(expr);
+        hasher.put(exprNormalized);
     }
 
     @Override
@@ -144,14 +160,14 @@ public class ChConstraint extends ChAbstractStatement implements IConstraint {
 
     private boolean compareUnalterable(ChConstraint newConstr) {
         return Objects.equals(isAssume, newConstr.isAssume)
-                && Objects.equals(expr, newConstr.expr);
+                && Objects.equals(exprNormalized, newConstr.exprNormalized);
     }
 
     @Override
     protected ChConstraint getCopy() {
         var constraintDst = new ChConstraint(name, isAssume);
         constraintDst.setNotValid(isNotValid);
-        constraintDst.setExpr(expr);
+        constraintDst.setExpr(expr, exprNormalized);
         return constraintDst;
     }
 }

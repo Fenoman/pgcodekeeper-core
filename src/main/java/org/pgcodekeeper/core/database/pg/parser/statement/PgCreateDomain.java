@@ -22,6 +22,7 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.parser.launcher.*;
 import org.pgcodekeeper.core.database.pg.schema.*;
@@ -68,13 +69,16 @@ public final class PgCreateDomain extends PgParserAbstract {
         VexContext exp = ctx.def_value;
         if (exp != null) {
             db.addAnalysisLauncher(new PgVexAnalysisLauncher(domain, exp, fileName));
-            domain.setDefaultValue(getExpressionText(exp, stream));
+            // the same token-level normalization the domain CHECK below gets,
+            // so a re-cased or re-spaced DEFAULT no longer reads as a changed one
+            domain.setDefaultValue(getExpressionText(exp, stream),
+                    PgParserUtils.normalizeWhitespaceUnquoted(exp, stream));
         }
         for (Domain_constraintContext constrCtx : ctx.dom_constraint) {
             if (constrCtx.CHECK() != null) {
                 IdentifierContext name = constrCtx.name;
                 var constrCheck = new PgConstraintCheck(name != null ? name.getText() : "");
-                parseDomainConstraint(domain, constrCheck, constrCtx, db, fileName, settings);
+                parseDomainConstraint(domain, constrCheck, constrCtx, db, fileName, stream, settings);
                 domain.addConstraint(constrCheck);
             }
             // вынесено ограничение, т.к. мы привязываем ограничение на нул к
@@ -92,18 +96,32 @@ public final class PgCreateDomain extends PgParserAbstract {
      * <p>
      * This method processes CHECK constraints for domains, including the constraint
      * expression and sets up analysis launchers for dependency tracking.
+     * <p>
+     * This is the single parsing point shared by all three domain CHECK sources -
+     * {@code CREATE DOMAIN}, {@code ALTER DOMAIN ... ADD CONSTRAINT}, and the JDBC
+     * catalog reader re-parsing {@code pg_get_constraintdef()} output - so the
+     * normalized form is computed identically regardless of which one called in.
      *
      * @param domain   the domain object that owns the constraint
      * @param constr   the constraint object to configure
      * @param ctx      the domain constraint context
      * @param db       the database for analysis launchers
      * @param location the source location for error reporting
+     * @param stream   the token stream that produced {@code ctx}, used to build
+     *                 the normalized comparison form
      * @param settings the parser settings
      */
     public static void parseDomainConstraint(PgDomain domain, PgConstraintCheck constr,
-                                             Domain_constraintContext ctx, IDatabase db, String location, ISettings settings) {
+                                             Domain_constraintContext ctx, IDatabase db, String location,
+                                             CommonTokenStream stream, ISettings settings) {
         VexContext vexCtx = ctx.vex();
-        constr.setExpression(Utils.checkNewLines(getFullCtxText(vexCtx), settings.isKeepNewlines()));
+        String expr = Utils.checkNewLines(getFullCtxText(vexCtx), settings.isKeepNewlines());
+        // Same token-level normalization CHECK constraints on tables already
+        // get: canonical whitespace and upper case for the reserved words of the
+        // folded range SQLLexer.ALL..WITH, so a re-cased or re-spaced domain
+        // CHECK no longer reads as a changed one.
+        String normalized = PgParserUtils.normalizeWhitespaceUnquoted(vexCtx, stream);
+        constr.setExpression(expr, normalized);
         db.addAnalysisLauncher(new PgDomainAnalysisLauncher(domain, vexCtx, location));
     }
 

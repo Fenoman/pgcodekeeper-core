@@ -17,6 +17,7 @@ package org.pgcodekeeper.core.database.ch.parser.statement;
 
 import java.util.Arrays;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.DangerStatement;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
@@ -39,10 +40,14 @@ public final class ChAlterTable extends ChParserAbstract {
      *
      * @param ctx      the ANTLR parse tree context for the ALTER TABLE statement
      * @param db       the ClickHouse database schema being processed
+     * @param stream   the token stream for expression normalization: ADD
+     *                 CONSTRAINT and ADD INDEX carry expressions that must
+     *                 compare against the same table read back from the server
      * @param settings parsing configuration settings
      */
-    public ChAlterTable(Alter_table_stmtContext ctx, ChDatabase db, ISettings settings) {
-        super(db, settings);
+    public ChAlterTable(Alter_table_stmtContext ctx, ChDatabase db, CommonTokenStream stream,
+                        ISettings settings) {
+        super(db, stream, settings);
         this.ctx = ctx;
     }
 

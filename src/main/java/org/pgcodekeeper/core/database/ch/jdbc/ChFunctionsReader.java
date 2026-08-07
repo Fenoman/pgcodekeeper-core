@@ -17,11 +17,13 @@ package org.pgcodekeeper.core.database.ch.jdbc;
 
 import java.sql.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.jdbc.*;
 import org.pgcodekeeper.core.database.ch.loader.ChJdbcLoader;
 import org.pgcodekeeper.core.database.ch.parser.statement.ChCreateFunction;
 import org.pgcodekeeper.core.database.ch.schema.*;
+import org.pgcodekeeper.core.utils.Pair;
 
 /**
  * Reader for ClickHouse functions.
@@ -51,8 +53,11 @@ public final class ChFunctionsReader extends AbstractJdbcReader<ChJdbcLoader> {
         String definition = result.getString("create_query");
 
         loader.submitChAntlrTask(definition,
-                p -> p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_function_stmt(),
-                ctx -> new ChCreateFunction(ctx, db, loader.getSettings()).parseObject(function));
+                p -> new Pair<>(
+                        p.ch_file().query(0).stmt().ddl_stmt().create_stmt().create_function_stmt(),
+                        (CommonTokenStream) p.getTokenStream()),
+                pair -> new ChCreateFunction(pair.getFirst(), db, pair.getSecond(), loader.getSettings())
+                        .parseObject(function));
 
         db.addChild(function);
     }

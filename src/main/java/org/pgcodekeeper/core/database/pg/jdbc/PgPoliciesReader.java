@@ -17,11 +17,14 @@ package org.pgcodekeeper.core.database.pg.jdbc;
 
 import java.sql.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.jdbc.QueryBuilder;
 import org.pgcodekeeper.core.database.pg.loader.PgJdbcLoader;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgVexAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.schema.PgPolicy;
+import org.pgcodekeeper.core.utils.Pair;
 
 /**
  * Reader for PostgreSQL policies.
@@ -81,16 +84,49 @@ public class PgPoliciesReader extends PgAbstractSearchPathJdbcReader {
 
         String using = res.getString("polqual");
         if (using != null) {
-            p.setUsing('(' + using + ')');
-            loader.submitAntlrTask(using, parser -> parser.vex_eof().vex().get(0),
-                    ctx -> db.addAnalysisLauncher(new PgVexAnalysisLauncher(p, ctx, loader.getCurrentLocation())));
+            // pg_get_expr renders an operator expression parenthesized but a
+            // bare Var, Const or function call not, while CREATE POLICY ...
+            // USING takes a parenthesized expression always - hence the wrap,
+            // which the normalized half below repeats so that it stays the
+            // normalization of the text actually stored here
+            //
+            // the catalog's own text is stored unconditionally, before the task
+            // is submitted: the finalizer runs only when this task's parse
+            // reported no errors (AbstractJdbcLoader:377), and a filter this
+            // grammar cannot read must still reach the model - without it the
+            // policy would be written out with no USING at all, dropping the row
+            // restriction
+            //
+            // both halves get it, and the normalized one must not be left empty:
+            // compare and computeHash read only that half, so an unreadable
+            // filter would otherwise compare equal to no filter at all and the
+            // difference would vanish from the tree and from the script. On a
+            // successful parse the finalizer overwrites it with the real
+            // normalization
+            String wrappedUsing = '(' + using + ')';
+            p.setUsing(wrappedUsing, wrappedUsing);
+            loader.submitAntlrTask(using,
+                    parser -> new Pair<>(parser.vex_eof().vex().get(0), (CommonTokenStream) parser.getTokenStream()),
+                    pair -> {
+                        var vex = pair.getFirst();
+                        p.setUsing(wrappedUsing,
+                                '(' + PgParserUtils.normalizeWhitespaceUnquoted(vex, pair.getSecond()) + ')');
+                        db.addAnalysisLauncher(new PgVexAnalysisLauncher(p, vex, loader.getCurrentLocation()));
+                    });
         }
 
         String check = res.getString("polwithcheck");
         if (check != null) {
-            p.setCheck('(' + check + ')');
-            loader.submitAntlrTask(check, parser -> parser.vex_eof().vex().get(0),
-                    ctx -> db.addAnalysisLauncher(new PgVexAnalysisLauncher(p, ctx, loader.getCurrentLocation())));
+            String wrappedCheck = '(' + check + ')';
+            p.setCheck(wrappedCheck, wrappedCheck);
+            loader.submitAntlrTask(check,
+                    parser -> new Pair<>(parser.vex_eof().vex().get(0), (CommonTokenStream) parser.getTokenStream()),
+                    pair -> {
+                        var vex = pair.getFirst();
+                        p.setCheck(wrappedCheck,
+                                '(' + PgParserUtils.normalizeWhitespaceUnquoted(vex, pair.getSecond()) + ')');
+                        db.addAnalysisLauncher(new PgVexAnalysisLauncher(p, vex, loader.getCurrentLocation()));
+                    });
         }
 
         loader.setAuthor(p, res);

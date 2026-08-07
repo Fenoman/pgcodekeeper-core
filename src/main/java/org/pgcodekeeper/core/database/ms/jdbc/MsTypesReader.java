@@ -120,7 +120,7 @@ public final class MsTypesReader extends AbstractSearchPathJdbcReader<MsJdbcLoad
     private void fillColumns(ISimpleColumnContainer stmt, List<MsXmlReader> cols) {
         for (MsXmlReader col : cols) {
             String colName = col.getString("name");
-            var simpCol = new SimpleColumn(colName);
+            var simpCol = new SimpleColumn(colName, null);
             simpCol.setDesc(col.getBoolean("is_desc"));
             stmt.addColumn(simpCol);
         }

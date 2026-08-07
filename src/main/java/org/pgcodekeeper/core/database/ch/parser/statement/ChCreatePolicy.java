@@ -17,6 +17,8 @@ package org.pgcodekeeper.core.database.ch.parser.statement;
 
 import java.util.Arrays;
 
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.pgcodekeeper.core.database.ch.parser.ChParserUtils;
 import org.pgcodekeeper.core.database.ch.parser.generated.CHParser.*;
 import org.pgcodekeeper.core.database.ch.parser.launcher.ChExpressionAnalysisLauncher;
 import org.pgcodekeeper.core.database.ch.schema.*;
@@ -38,10 +40,12 @@ public final class ChCreatePolicy extends ChParserAbstract {
      *
      * @param ctx      the ANTLR parse tree context for the CREATE POLICY statement
      * @param db       the ClickHouse database schema being processed
+     * @param stream   the token stream for expression normalization
      * @param settings parsing configuration settings
      */
-    public ChCreatePolicy(Create_policy_stmtContext ctx, ChDatabase db, ISettings settings) {
-        super(db, settings);
+    public ChCreatePolicy(Create_policy_stmtContext ctx, ChDatabase db, CommonTokenStream stream,
+                          ISettings settings) {
+        super(db, stream, settings);
         this.ctx = ctx;
     }
 
@@ -68,12 +72,37 @@ public final class ChCreatePolicy extends ChParserAbstract {
 
         ExprContext using = actionCtx.expr();
         if (using != null) {
-            policy.setUsing(getFullCtxText(using));
-            db.addAnalysisLauncher(new ChExpressionAnalysisLauncher(policy, using, fileName));
+            setUsingWithAnalyze(policy, getFullCtxText(using), using, stream, db, fileName);
             return;
         }
 
         addRoles(actionCtx.users(), policy, ChPolicy::addRole, ChPolicy::addExcept, "ALL");
+    }
+
+    /**
+     * The one place a policy filter is normalized, called from both sides of
+     * the comparison: from here for a project file, and from
+     * {@code ChPoliciesReader} for the filter of {@code system.row_policies}.
+     * The two sides parse different shapes - a whole {@code CREATE POLICY}
+     * against a bare expression - so this method, rather than a parser class,
+     * is what makes them agree, and a test that drives one of them drives what
+     * the other runs.
+     * <p>
+     * The raw half is a parameter because each side knows a different authority
+     * for it: the project file has the author's own text, the reader has the
+     * catalog's.
+     *
+     * @param policy   the policy to fill
+     * @param using    the filter text as written, used for DDL output
+     * @param ctx      the parsed filter, normalized here for comparison
+     * @param stream   the token stream {@code ctx} came from
+     * @param db       the database collecting analysis launchers
+     * @param location where to report an unresolved reference from
+     */
+    public static void setUsingWithAnalyze(ChPolicy policy, String using, ExprContext ctx,
+                                           CommonTokenStream stream, ChDatabase db, String location) {
+        policy.setUsing(using, ChParserUtils.normalizeWhitespaceUnquoted(ctx, stream));
+        db.addAnalysisLauncher(new ChExpressionAnalysisLauncher(policy, ctx, location));
     }
 
     @Override

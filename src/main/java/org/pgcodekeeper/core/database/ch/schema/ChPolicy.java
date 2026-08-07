@@ -31,6 +31,25 @@ public class ChPolicy extends ChAbstractStatement implements IPolicy {
 
     private EventType event;
     private String using;
+
+    /**
+     * The filter as the comparison sees it: the same tokens with canonical
+     * spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it is still compared as written.
+     * <p>
+     * {@link #using} keeps the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it.
+     * <p>
+     * Of the normalized ClickHouse expressions, this is the only one
+     * whose two sides are produced by different code: the project side
+     * normalizes the {@code USING} context of a {@code CREATE POLICY} in
+     * {@code ChCreatePolicy}, while the database side re-parses the bare filter
+     * text of {@code system.row_policies} in {@code ChPoliciesReader}. They meet
+     * here and nowhere else.
+     */
+    private String usingNormalized;
+
     private boolean isPermissive = true;
 
     /**
@@ -120,8 +139,13 @@ public class ChPolicy extends ChAbstractStatement implements IPolicy {
         resetHash();
     }
 
-    public void setUsing(String using) {
+    /**
+     * @param using           the filter text as written, used for DDL output
+     * @param usingNormalized the same filter normalized for comparison
+     */
+    public void setUsing(String using, String usingNormalized) {
         this.using = using;
+        this.usingNormalized = usingNormalized;
         resetHash();
     }
 
@@ -144,7 +168,7 @@ public class ChPolicy extends ChAbstractStatement implements IPolicy {
     public void computeHash(Hasher hasher) {
         hasher.put(isPermissive);
         hasher.put(event);
-        hasher.put(using);
+        hasher.put(usingNormalized);
         hasher.put(roles);
         hasher.put(excepts);
     }
@@ -158,7 +182,7 @@ public class ChPolicy extends ChAbstractStatement implements IPolicy {
                 && super.compare(police)
                 && isPermissive == police.isPermissive
                 && event == police.event
-                && Objects.equals(using, police.using)
+                && Objects.equals(usingNormalized, police.usingNormalized)
                 && roles.equals(police.roles)
                 && excepts.equals(police.excepts);
     }
@@ -168,7 +192,7 @@ public class ChPolicy extends ChAbstractStatement implements IPolicy {
         ChPolicy copy = new ChPolicy(name);
         copy.setPermissive(isPermissive);
         copy.setEvent(event);
-        copy.setUsing(using);
+        copy.setUsing(using, usingNormalized);
         copy.roles.addAll(roles);
         copy.excepts.addAll(excepts);
         return copy;

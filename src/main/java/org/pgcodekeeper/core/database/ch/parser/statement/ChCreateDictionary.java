@@ -17,6 +17,7 @@ package org.pgcodekeeper.core.database.ch.parser.statement;
 
 import java.util.List;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
@@ -38,10 +39,12 @@ public final class ChCreateDictionary extends ChParserAbstract {
      *
      * @param ctx      the ANTLR parse tree context for the CREATE DICTIONARY statement
      * @param db       the ClickHouse database schema being processed
+     * @param stream   the token stream for expression normalization
      * @param settings parsing configuration settings
      */
-    public ChCreateDictionary(Create_dictinary_stmtContext ctx, ChDatabase db, ISettings settings) {
-        super(db, settings);
+    public ChCreateDictionary(Create_dictinary_stmtContext ctx, ChDatabase db, CommonTokenStream stream,
+                              ISettings settings) {
+        super(db, stream, settings);
         this.ctx = ctx;
     }
 
@@ -66,10 +69,12 @@ public final class ChCreateDictionary extends ChParserAbstract {
             setDataType(col, attrCtx.data_type());
             if (attrCtx.DEFAULT() != null) {
                 col.setDefaultType("DEFAULT");
-                col.setDefaultValue(getFullCtxText(attrCtx.literal()));
+                var literalCtx = attrCtx.literal();
+                col.setDefaultValue(getFullCtxText(literalCtx), normalize(literalCtx));
             } else if (attrCtx.EXPRESSION() != null) {
                 col.setDefaultType("EXPRESSION");
-                col.setDefaultValue(getFullCtxText(attrCtx.expr()));
+                var exprCtx = attrCtx.expr();
+                col.setDefaultValue(getFullCtxText(exprCtx), normalize(exprCtx));
             }
             var attrOptCtx = attrCtx.attr_def_option();
             if (attrOptCtx != null) {
@@ -78,7 +83,8 @@ public final class ChCreateDictionary extends ChParserAbstract {
             dictionary.addColumn(col);
         }
         if (ctx.PRIMARY() != null) {
-            dictionary.setPk(getFullCtxText(ctx.expr_list()));
+            var pkCtx = ctx.expr_list();
+            dictionary.setPk(getFullCtxText(pkCtx), normalize(pkCtx));
         }
         for (var optionCtx : ctx.dictionary_option()) {
             parseOption(optionCtx, dictionary);
@@ -89,6 +95,20 @@ public final class ChCreateDictionary extends ChParserAbstract {
         }
     }
 
+    /**
+     * Fills one dictionary option. Each of the three single-valued ones -
+     * {@code LIFETIME}, {@code LAYOUT} and {@code RANGE} - is handed over twice:
+     * once as the author wrote it, for the DDL, and once normalized, for the
+     * comparison.
+     * <p>
+     * The {@code SETTINGS} values stay raw on both sides. They are {@code expr}
+     * by grammar ({@code pair: identifier EQ_SINGLE expr}), so this is a
+     * decision rather than an oversight: it leaves a dictionary setting
+     * compared exactly like the engine setting of a table, which is held raw
+     * as well, and the reason recorded on the {@code options} field of
+     * {@link ChEngine} is about that map, not this one. Normalizing one of the
+     * two and not the other is the choice that would need arguing.
+     */
     private void parseOption(Dictionary_optionContext option, ChDictionary dictionary) {
         if (option.SOURCE() != null) {
             parseSource(option, dictionary);
@@ -96,17 +116,20 @@ public final class ChCreateDictionary extends ChParserAbstract {
         }
 
         if (option.LIFETIME() != null) {
-            dictionary.setLifeTime(getFullCtxText(option.life_time_expr()));
+            var lifeTimeCtx = option.life_time_expr();
+            dictionary.setLifeTime(getFullCtxText(lifeTimeCtx), normalize(lifeTimeCtx));
             return;
         }
 
         if (option.LAYOUT() != null) {
-            dictionary.setLayOut(getFullCtxText(option.layout_expr()));
+            var layOutCtx = option.layout_expr();
+            dictionary.setLayOut(getFullCtxText(layOutCtx), normalize(layOutCtx));
             return;
         }
 
         if (option.RANGE() != null) {
-            dictionary.setRange(getFullCtxText(option.range_expr()));
+            var rangeCtx = option.range_expr();
+            dictionary.setRange(getFullCtxText(rangeCtx), normalize(rangeCtx));
             return;
         }
 

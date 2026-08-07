@@ -17,6 +17,7 @@ package org.pgcodekeeper.core.database.ch.parser.statement;
 
 import java.util.List;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.pgcodekeeper.core.database.api.schema.DbObjType;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
@@ -43,10 +44,12 @@ public final class ChCreateTable extends ChParserAbstract {
      *
      * @param ctx      the ANTLR parse tree context for the CREATE TABLE statement
      * @param db       the ClickHouse database schema being processed
+     * @param stream   the token stream for expression normalization
      * @param settings parsing configuration settings
      */
-    public ChCreateTable(Create_table_stmtContext ctx, ChDatabase db, ISettings settings) {
-        super(db, settings);
+    public ChCreateTable(Create_table_stmtContext ctx, ChDatabase db, CommonTokenStream stream,
+                         ISettings settings) {
+        super(db, stream, settings);
         this.ctx = ctx;
     }
 
@@ -93,7 +96,7 @@ public final class ChCreateTable extends ChParserAbstract {
         }
         var pkCtx = elementCtx.primary_key_clause();
         if (pkCtx != null) {
-            table.setPkExpr(getFullCtxText(pkCtx.expr()));
+            table.setPkExpr(getFullCtxText(pkCtx.expr()), normalize(pkCtx.expr()));
             return;
         }
         var constrCtx = elementCtx.table_constraint_def();
@@ -108,8 +111,10 @@ public final class ChCreateTable extends ChParserAbstract {
         }
         var projCtx = elementCtx.table_projection_def();
         if (projCtx != null) {
+            var selectCtx = projCtx.select_stmt_no_parens();
             table.addProjection(projCtx.qualified_name().getText(),
-                    '(' + getFullCtxText(projCtx.select_stmt_no_parens()) + ')');
+                    '(' + getFullCtxText(selectCtx) + ')',
+                    '(' + normalize(selectCtx) + ')');
             return;
         }
 

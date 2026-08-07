@@ -103,7 +103,7 @@ public class MsIndicesAndPKReader extends AbstractSearchPathJdbcReader<MsJdbcLoa
             if (!isClusteredColumnstoreInd && col.getBoolean("is_inc")) {
                 stmt.addInclude(colName);
             } else if (!isColumnstoreInd) {
-                var simpleCol = new SimpleColumn(colName);
+                var simpleCol = new SimpleColumn(colName, null);
                 simpleCol.setDesc(isDesc);
                 stmt.addColumn(simpleCol);
             }

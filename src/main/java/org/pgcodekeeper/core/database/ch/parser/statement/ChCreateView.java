@@ -37,7 +37,6 @@ import org.pgcodekeeper.core.settings.ISettings;
 public final class ChCreateView extends ChParserAbstract {
 
     private final Create_view_stmtContext ctx;
-    private final CommonTokenStream stream;
 
     /**
      * Creates a parser for ClickHouse CREATE VIEW statements.
@@ -48,9 +47,8 @@ public final class ChCreateView extends ChParserAbstract {
      * @param settings parsing configuration settings
      */
     public ChCreateView(Create_view_stmtContext ctx, ChDatabase db, CommonTokenStream stream, ISettings settings) {
-        super(db, settings);
+        super(db, stream, settings);
         this.ctx = ctx;
-        this.stream = stream;
     }
 
     private Qualified_nameContext getQname() {

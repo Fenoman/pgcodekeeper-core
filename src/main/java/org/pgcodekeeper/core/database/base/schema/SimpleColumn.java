@@ -34,13 +34,31 @@ public class SimpleColumn implements Serializable, IHashable {
     private String collation;
 
     private final String name;
+
+    /**
+     * The column text as the comparison sees it, or null when nothing
+     * normalized it. Only the PostgreSQL parse fills this: ClickHouse folds
+     * identifier case differently and SQL Server has no normalizer at all, so
+     * for those dialects the raw name stays the only thing there is.
+     */
+    private final String nameNormalized;
+
     private String operator;
     private String opClass;
     private String nullsOrdering;
     private boolean isDesc;
 
-    public SimpleColumn(String name) {
+    /**
+     * Creates a column reference.
+     *
+     * @param name           the column text as written
+     * @param nameNormalized the column text as the comparison sees it, or null
+     *                       when this dialect has no normalizer of its own and
+     *                       the raw name is the only thing there is
+     */
+    public SimpleColumn(String name, String nameNormalized) {
         this.name = name;
+        this.nameNormalized = nameNormalized;
     }
 
     /**
@@ -110,7 +128,7 @@ public class SimpleColumn implements Serializable, IHashable {
 
     @Override
     public void computeHash(Hasher hasher) {
-        hasher.put(name);
+        hasher.put(comparableName());
         hasher.put(opClassParams);
         hasher.put(collation);
         hasher.put(operator);
@@ -127,12 +145,16 @@ public class SimpleColumn implements Serializable, IHashable {
         if (!(obj instanceof SimpleColumn other)) {
             return false;
         }
-        return Objects.equals(name, other.name)
+        return Objects.equals(comparableName(), other.comparableName())
                 && Objects.equals(opClassParams, other.opClassParams)
                 && Objects.equals(collation, other.collation)
                 && Objects.equals(operator, other.operator)
                 && Objects.equals(opClass, other.opClass)
                 && Objects.equals(nullsOrdering, other.nullsOrdering)
                 && isDesc == other.isDesc;
+    }
+
+    private String comparableName() {
+        return nameNormalized != null ? nameNormalized : name;
     }
 }

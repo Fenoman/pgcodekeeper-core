@@ -36,7 +36,11 @@ import org.pgcodekeeper.core.settings.ISettings;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.pgcodekeeper.core.it.IntegrationTestUtils.assertDiff;
 import static org.pgcodekeeper.core.it.IntegrationTestUtils.loadTestDump;
 
@@ -67,9 +71,35 @@ class PgAntlrLoaderTest {
 
         assertDiff(databaseProvider, d, dbPredefined, settings, "PgDumpLoader: predefined object is not equal to file " + fileName);
 
+        // assertDiff demands an empty migration script, and a script can be empty
+        // while the two objects differ - a value the comparison reads but the
+        // script generator does not is invisible to it. A column DEFAULT is
+        // exactly that: a wrong normalized half makes compare false, and then
+        // compareDefaults finds the raw texts equal and writes nothing. Measured:
+        // without the line below, nine normalized halves replaced by garbage left
+        // all 17 tests green.
+        //
+        // The hashes are taken per schema and not on the database, which would
+        // not bite: PgDatabase.computeChildrenHash covers extensions, event
+        // triggers, FDWs, servers and casts, and no schema, so a database hash
+        // is blind to everything a schema holds. A schema hashes its tables and
+        // a table hashes its columns, so this is the highest level that still
+        // reaches the values below.
+        assertEquals(schemaHashes(dbPredefined), schemaHashes(d),
+                "PgDumpLoader: predefined schema does not hash equal to file " + fileName);
+
         // test deepCopy mechanism
         assertDiff(databaseProvider, d, (IDatabase) d.deepCopy(), settings, "PgStatement deep copy altered");
         assertDiff(databaseProvider, dbPredefined, d, settings, "PgStatement deep copy altered original");
+    }
+
+    /**
+     * Schema name to the hash of that schema, so that a mismatch names the schema
+     * it is in rather than reporting two opaque integers.
+     */
+    private static Map<String, Integer> schemaHashes(IDatabase db) {
+        return db.getSchemas().stream()
+                .collect(Collectors.toMap(ISchema::getName, ISchema::hashCode, (x, y) -> x, TreeMap::new));
     }
 
     void exportFullDb(String fileName, IDatabase dbPredefined, Path exportDir) throws IOException, InterruptedException {
@@ -152,7 +182,11 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("time_received");
         col.setType("timestamp");
-        col.setDefaultValue("now()");
+        // the file spells the default as the first argument; the comparison
+        // reads the second, so both are supplied here exactly as the parser
+        // fills them - that is why the normalized halves below carry spaces the
+        // project files do not have
+        col.setDefaultValue("now()", "now ()");
         table.addColumn(col);
 
         col = new PgColumn("time_finished_received");
@@ -161,7 +195,7 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("read");
         col.setType("smallint");
-        col.setDefaultValue("0");
+        col.setDefaultValue("0", "0");
         table.addColumn(col);
 
         col = new PgColumn("station_id");
@@ -233,7 +267,7 @@ class PgAntlrLoaderTest {
 
         PgIndex idx = new PgIndex("contacts_number_pool_id_idx");
         table.addChild(idx);
-        idx.addColumn(new SimpleColumn("number_pool_id"));
+        idx.addColumn(new SimpleColumn("number_pool_id", "number_pool_id"));
         testDatabase("schema_2.sql", d, exportDir);
     }
 
@@ -253,19 +287,19 @@ class PgAntlrLoaderTest {
 
         PgColumn col = new PgColumn("aid");
         col.setType(INTEGER);
-        col.setDefaultValue("nextval('\"admins_aid_seq\"'::regclass)");
+        col.setDefaultValue("nextval('\"admins_aid_seq\"'::regclass)", "nextval ('\"admins_aid_seq\"' :: regclass)");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("companyid");
         col.setType(INTEGER);
-        col.setDefaultValue("0");
+        col.setDefaultValue("0", "0");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("groupid");
         col.setType(INTEGER);
-        col.setDefaultValue("0");
+        col.setDefaultValue("0", "0");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
@@ -281,7 +315,7 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("superuser");
         col.setType(BOOLEAN);
-        col.setDefaultValue("'f'::bool");
+        col.setDefaultValue("'f'::bool", "'f' :: bool");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
@@ -308,19 +342,19 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("enabled");
         col.setType(BOOLEAN);
-        col.setDefaultValue("'t'::bool");
+        col.setDefaultValue("'t'::bool", "'t' :: bool");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("lastlogints");
         col.setType("timestamp with time zone");
-        col.setDefaultValue("now()");
+        col.setDefaultValue("now()", "now ()");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("expirienced");
         col.setType(BOOLEAN);
-        col.setDefaultValue("'f'::bool");
+        col.setDefaultValue("'f'::bool", "'f' :: bool");
         table.addColumn(col);
 
         var constraintPK = new PgConstraintPk("admins_pkey", true);
@@ -341,7 +375,7 @@ class PgAntlrLoaderTest {
         PgColumn col = new PgColumn("id");
         col.setType(BIGINT);
         createNotNullConstraint(table, col);
-        col.setDefaultValue("nextval('public.call_logs_id_seq'::regclass)");
+        col.setDefaultValue("nextval('public.call_logs_id_seq'::regclass)", "nextval ('public.call_logs_id_seq' :: regclass)");
         table.addColumn(col);
 
         testDatabase("schema_4.sql", d, exportDir);
@@ -444,8 +478,8 @@ class PgAntlrLoaderTest {
 
         PgIndex idx = new PgIndex("test_table_deleted");
         idx.setMethod("btree");
-        idx.addColumn(new SimpleColumn("date_deleted"));
-        idx.setWhere("(date_deleted IS NULL)");
+        idx.addColumn(new SimpleColumn("date_deleted", "date_deleted"));
+        idx.setWhere("(date_deleted IS NULL)", "(date_deleted IS NULL)");
         table.addChild(idx);
 
         testDatabase("schema_6.sql", d, exportDir);
@@ -553,7 +587,7 @@ class PgAntlrLoaderTest {
         PgColumn col = new PgColumn("id");
         col.setType(BIGINT);
         createNotNullConstraint(table, col);
-        col.setDefaultValue("nextval('public.user_id_seq'::regclass)");
+        col.setDefaultValue("nextval('public.user_id_seq'::regclass)", "nextval ('public.user_id_seq' :: regclass)");
         table.addColumn(col);
 
         col = new PgColumn("email");
@@ -563,13 +597,15 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("created");
         col.setType("timestamp with time zone");
-        col.setDefaultValue("now()");
+        col.setDefaultValue("now()", "now ()");
         table.addColumn(col);
         table.setOwner(POSTGRES);
 
         PgRule rule = new PgRule("on_select");
         rule.setEvent(EventType.SELECT);
-        rule.setCondition("(1=1)");
+        // the file spells it "(1=1)"; the comparison sees the normalized half,
+        // so both are supplied here exactly as the parser would fill them
+        rule.setCondition("(1=1)", "(1 = 1)");
         rule.setInstead(true);
         table.addChild(rule);
 
@@ -669,19 +705,19 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("is_active");
         col.setType(BOOLEAN);
-        col.setDefaultValue("false");
+        col.setDefaultValue("false", "FALSE");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("updated");
         col.setType("timestamp without time zone");
-        col.setDefaultValue("now()");
+        col.setDefaultValue("now()", "now ()");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         col = new PgColumn("created");
         col.setType("timestamp without time zone");
-        col.setDefaultValue("now()");
+        col.setDefaultValue("now()", "now ()");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
@@ -692,13 +728,13 @@ class PgAntlrLoaderTest {
 
         col = new PgColumn("last_visit");
         col.setType("timestamp without time zone");
-        col.setDefaultValue("now()");
+        col.setDefaultValue("now()", "now ()");
         createNotNullConstraint(table, col);
         table.addColumn(col);
 
         PgIndex idx = new PgIndex("fki_user_role_id_fkey");
         idx.setMethod("btree");
-        idx.addColumn(new SimpleColumn("role_id"));
+        idx.addColumn(new SimpleColumn("role_id", "role_id"));
         table.addChild(idx);
 
         var constraintFk = new PgConstraintFk("user_role_id_fkey");
@@ -796,7 +832,7 @@ class PgAntlrLoaderTest {
         col.setType(INTEGER);
         createNotNullConstraint(table, col);
         col.setComment("'id column'");
-        col.setDefaultValue("nextval('public.test_id_seq'::regclass)");
+        col.setDefaultValue("nextval('public.test_id_seq'::regclass)", "nextval ('public.test_id_seq' :: regclass)");
         table.addColumn(col);
 
         col = new PgColumn("text");
@@ -806,7 +842,7 @@ class PgAntlrLoaderTest {
         table.addColumn(col);
 
         var constraintCheck = new PgConstraintCheck("text_check");
-        constraintCheck.setExpression("(length((text)::text) > 0)");
+        constraintCheck.setExpression("(length((text)::text) > 0)", "(length ((text) :: text) > 0)");
         constraintCheck.setComment("'text check'");
         table.addChild(constraintCheck);
 

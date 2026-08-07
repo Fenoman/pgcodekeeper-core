@@ -119,7 +119,7 @@ class MsAntlrLoaderTest {
         MsConstraintPk constriaintPk = new MsConstraintPk("PK_fax_boxes", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("fax_box_id"));
+        constriaintPk.addColumn(new SimpleColumn("fax_box_id", null));
         table.addChild(constriaintPk);
 
         table.setOwner(MS_USER);
@@ -176,7 +176,7 @@ class MsAntlrLoaderTest {
         constriaintPk = new MsConstraintPk("PK_faxes", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("fax_id"));
+        constriaintPk.addColumn(new SimpleColumn("fax_id", null));
         table.addChild(constriaintPk);
 
         var constraintFk = new MsConstraintFk("FK_faxes_fax_box_id");
@@ -252,7 +252,7 @@ class MsAntlrLoaderTest {
         table.addColumn(col);
 
         MsIndex idx = new MsIndex("IX_contacts_number_pool_id");
-        idx.addColumn(new SimpleColumn("number_pool_id"));
+        idx.addColumn(new SimpleColumn("number_pool_id", null));
         table.addChild(idx);
 
         testDatabase("ms_schema_1.sql", d, exportDir);
@@ -284,7 +284,7 @@ class MsAntlrLoaderTest {
         MsConstraintPk constriaintPk = new MsConstraintPk("PK_admins", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("aid"));
+        constriaintPk.addColumn(new SimpleColumn("aid", null));
         table.addChild(constriaintPk);
 
         col = new MsColumn("companyid");
@@ -498,7 +498,7 @@ class MsAntlrLoaderTest {
         table.setOwner(MS_USER);
 
         MsIndex idx = new MsIndex("IX_test_table_date_deleted");
-        idx.addColumn(new SimpleColumn("date_deleted"));
+        idx.addColumn(new SimpleColumn("date_deleted", null));
         idx.setWhere("(date_deleted IS NULL)");
         table.addChild(idx);
 
@@ -714,7 +714,7 @@ class MsAntlrLoaderTest {
         MsConstraintPk constriaintPk = new MsConstraintPk("PK_acl_role", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("id"));
+        constriaintPk.addColumn(new SimpleColumn("id", null));
         table.addChild(constriaintPk);
 
         table.setOwner(MS_USER);
@@ -777,7 +777,7 @@ class MsAntlrLoaderTest {
         table.addColumn(col);
 
         MsIndex idx = new MsIndex("IX_user_role_id");
-        idx.addColumn(new SimpleColumn("role_id"));
+        idx.addColumn(new SimpleColumn("role_id", null));
         table.addChild(idx);
 
         var constraintFk = new MsConstraintFk("FK_user_fax_box_id");
@@ -842,7 +842,7 @@ class MsAntlrLoaderTest {
         MsConstraintPk constriaintPk = new MsConstraintPk("PK_TABLE_1", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("ID"));
+        constriaintPk.addColumn(new SimpleColumn("ID", null));
         table.addChild(constriaintPk);
 
         testDatabase("ms_schema_11.sql", d, exportDir);
@@ -998,7 +998,7 @@ class MsAntlrLoaderTest {
         MsConstraintPk constriaintPk = new MsConstraintPk("PK_test", true);
         constriaintPk.setClustered(true);
         constriaintPk.setDataSpace(PRIMARY);
-        constriaintPk.addColumn(new SimpleColumn("id"));
+        constriaintPk.addColumn(new SimpleColumn("id", null));
         table.addChild(constriaintPk);
         table.setOwner(MS_USER);
 
@@ -1017,7 +1017,7 @@ class MsAntlrLoaderTest {
 
         MsIndex idx = new MsIndex("IX_test_id");
         table.addChild(idx);
-        idx.addColumn(new SimpleColumn("id"));
+        idx.addColumn(new SimpleColumn("id", null));
 
         MsTrigger trigger = new MsTrigger("test_trigger");
         trigger.setQuotedIdentified(true);

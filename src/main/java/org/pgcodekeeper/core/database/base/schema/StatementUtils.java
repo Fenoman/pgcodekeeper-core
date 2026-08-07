@@ -18,10 +18,17 @@ package org.pgcodekeeper.core.database.base.schema;
 import org.pgcodekeeper.core.database.api.schema.IColumn;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.IStatement;
+import org.pgcodekeeper.core.model.difftree.ColumnVisibility;
+import org.pgcodekeeper.core.settings.ISettings;
+import org.pgcodekeeper.core.utils.Utils;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 
 /**
@@ -30,6 +37,153 @@ import java.util.function.UnaryOperator;
  * across different database types.
  */
 public final class StatementUtils {
+
+    private static final Comparator<IColumn> DISPLAY_ORDER =
+            Comparator.comparing(IColumn::getName, Comparator.nullsFirst(Utils::compareByCodePoints));
+
+    /**
+     * Returns the columns a project file of a table holds, in the order they are
+     * written in.
+     * <p>
+     * A column an ignore list hides is not pgCodeKeeper's to write, so it does
+     * not enter a project file, see {@link ColumnVisibility#forProjectFile(List)}.
+     * This is the only answer of that kind anywhere: a migration script writes
+     * every column it is given and asks the rules nothing, because the truth of
+     * a script is the project and the truth of a project is decided here. What
+     * the project already declares stays the project's, though: a hidden column
+     * it holds is kept with the definition the project gives it, whether the
+     * database still holds that column or not. The database disagreeing about a
+     * column it was told not to manage says nothing about that column.
+     * <p>
+     * The columns the migration manages keep the order and the state of the
+     * database, as every other property of the table does.
+     * <p>
+     * Every dialect owns its columns in a list of its own and its own table class
+     * answers {@code adoptUnmanaged} out of it, so the reasoning above lives here
+     * rather than three times over.
+     *
+     * @param database the columns of the state of the table the database holds
+     * @param project  the columns of the state the project holds, {@code null}
+     *                 when the project holds no such table
+     * @param managed  the rules, already bound to both states of the table
+     * @param <T>      the column type of the dialect
+     * @return the list of the database itself when the rules leave every column
+     * alone, a new list otherwise
+     */
+    public static <T extends IColumn> List<T> columnsForProjectFile(List<T> database, List<T> project,
+                                                                    ColumnVisibility managed) {
+        if (!managed.hidesAnything()) {
+            return database;
+        }
+
+        // the columns of the database the project is to declare, refusal and all
+        List<T> managedColumns = managed.forProjectFile(database);
+        if (managedColumns == database && project == null) {
+            return database;
+        }
+        Set<String> managedNames = new HashSet<>();
+        managedColumns.forEach(column -> managedNames.add(column.getName()));
+
+        List<T> forProject = new ArrayList<>(database.size());
+        boolean changed = false;
+        for (T column : database) {
+            if (managedNames.contains(column.getName())) {
+                forProject.add(column);
+                continue;
+            }
+            T inProject = findColumn(project, column.getName());
+            if (inProject == null) {
+                changed = true;
+            } else {
+                forProject.add(inProject);
+                changed |= !inProject.equals(column);
+            }
+        }
+
+        changed |= keepHiddenColumnsOnlyTheProjectHolds(database, project, managed, forProject);
+        return changed ? forProject : database;
+    }
+
+    /**
+     * Puts back every hidden column the project declares while the state of the
+     * database does not hold it at all.
+     * <p>
+     * Each keeps the neighbour it has in the project: it is written right after
+     * the nearest column that precedes it there and is one of the columns already
+     * collected. The position is of no consequence to a comparison - a hidden
+     * column takes no part in one - and this is the position that leaves the file
+     * of the project as it was.
+     *
+     * @return true if anything was put back
+     */
+    private static <T extends IColumn> boolean keepHiddenColumnsOnlyTheProjectHolds(
+            List<T> database, List<T> project, ColumnVisibility managed, List<T> forProject) {
+        if (project == null) {
+            return false;
+        }
+
+        boolean kept = false;
+        for (int i = 0; i < project.size(); i++) {
+            T column = project.get(i);
+            if (findColumn(database, column.getName()) != null || !managed.isHidden(column)) {
+                continue;
+            }
+            forProject.add(positionAfterPredecessor(project, i, forProject), column);
+            kept = true;
+        }
+        return kept;
+    }
+
+    /**
+     * Where a column of the project belongs among the columns already collected:
+     * right after the nearest column preceding it in the project that is one of
+     * them, or at the front when none of them is.
+     */
+    private static <T extends IColumn> int positionAfterPredecessor(List<T> project, int at, List<T> forProject) {
+        for (int i = at - 1; i >= 0; i--) {
+            String name = project.get(i).getName();
+            for (int j = 0; j < forProject.size(); j++) {
+                if (forProject.get(j).getName().equals(name)) {
+                    return j + 1;
+                }
+            }
+        }
+        return 0;
+    }
+
+    private static <T extends IColumn> T findColumn(List<T> columns, String name) {
+        if (columns == null) {
+            return null;
+        }
+        for (T column : columns) {
+            if (column.getName().equals(name)) {
+                return column;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns the columns of a table in the order they are to be written in.
+     * <p>
+     * That is the order they are stored in, which is the order of the table, and
+     * only a rendering meant for a human eye may replace it with the order of
+     * their names. See {@link ISettings#isSortColumnsForDisplay()} for why, and
+     * for the promise that no migration script is ever rendered this way.
+     *
+     * @param columns  the columns of a table in their stored order
+     * @param settings settings of the rendering
+     * @return the given list itself, or a name-ordered copy of it
+     */
+    public static <T extends IColumn> List<T> orderColumnsForWriting(List<T> columns, ISettings settings) {
+        if (columns.size() < 2 || !settings.isSortColumnsForDisplay()) {
+            return columns;
+        }
+
+        List<T> ordered = new ArrayList<>(columns);
+        ordered.sort(DISPLAY_ORDER);
+        return ordered;
+    }
 
     /**
      * Checks if the order of the table columns has changed.
@@ -103,12 +257,20 @@ public final class StatementUtils {
 
     /**
      * Appends column names to a StringBuilder with proper quoting for the database type.
+     * Appends nothing at all for an empty collection: a constraint can legitimately reach
+     * this call with no known columns (a primary key or unique constraint that adopts an
+     * existing index instead of listing its own), and the unconditional variant used to
+     * assume a trailing ", " to trim, cutting into whatever the caller had written before
+     * the opening paren instead and leaving unbalanced, unparseable output.
      *
      * @param sbSQL the StringBuilder to append to
      * @param cols the collection of column names
      * @param quoter quoting operator
      */
     public static void appendCols(StringBuilder sbSQL, Collection<String> cols, UnaryOperator<String> quoter) {
+        if (cols.isEmpty()) {
+            return;
+        }
         sbSQL.append('(');
         for (var col : cols) {
             sbSQL.append(quoter.apply(col));

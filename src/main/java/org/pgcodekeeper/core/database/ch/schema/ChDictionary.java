@@ -42,6 +42,28 @@ public class ChDictionary extends ChAbstractStatement implements IRelation {
     private String range;
 
     /**
+     * The four clauses above as the comparison sees them: the same tokens with
+     * canonical spacing, and the reserved words of the folded range
+     * {@code CHLexer.ALL..WITH} raised to upper case.
+     * <p>
+     * Only that range folds, so a word outside it is still compared as written.
+     * {@code MIN} and {@code MAX}, the whole keyword content of
+     * {@code life_time_expr} and {@code range_expr}, both sit outside it, so
+     * re-casing either of them still reads as a change. The narrow fold is
+     * deliberate: ClickHouse is case-sensitive about identifiers and function
+     * names on the server, so a wider one would hide a real difference.
+     * <p>
+     * The raw fields keep the text the DDL is written from, because a project
+     * file must round-trip exactly as its author wrote it. Each pair is filled
+     * by one two-argument setter, so a caller cannot supply one half and forget
+     * the other.
+     */
+    private String lifeTimeNormalized;
+    private String layOutNormalized;
+    private String pkNormalized;
+    private String rangeNormalized;
+
+    /**
      * Creates a new ClickHouse dictionary with the specified name.
      *
      * @param name the name of the dictionary
@@ -120,23 +142,43 @@ public class ChDictionary extends ChAbstractStatement implements IRelation {
         resetHash();
     }
 
-    public void setLifeTime(String lifeTime) {
+    /**
+     * @param lifeTime           the clause text as written, used for DDL output
+     * @param lifeTimeNormalized the same clause normalized for comparison
+     */
+    public void setLifeTime(String lifeTime, String lifeTimeNormalized) {
         this.lifeTime = lifeTime;
+        this.lifeTimeNormalized = lifeTimeNormalized;
         resetHash();
     }
 
-    public void setLayOut(String layOut) {
+    /**
+     * @param layOut           the clause text as written, used for DDL output
+     * @param layOutNormalized the same clause normalized for comparison
+     */
+    public void setLayOut(String layOut, String layOutNormalized) {
         this.layOut = layOut;
+        this.layOutNormalized = layOutNormalized;
         resetHash();
     }
 
-    public void setPk(String pk) {
+    /**
+     * @param pk           the key text as written, used for DDL output
+     * @param pkNormalized the same key normalized for comparison
+     */
+    public void setPk(String pk, String pkNormalized) {
         this.pk = pk;
+        this.pkNormalized = pkNormalized;
         resetHash();
     }
 
-    public void setRange(String range) {
+    /**
+     * @param range           the clause text as written, used for DDL output
+     * @param rangeNormalized the same clause normalized for comparison
+     */
+    public void setRange(String range, String rangeNormalized) {
         this.range = range;
+        this.rangeNormalized = rangeNormalized;
         resetHash();
     }
 
@@ -186,10 +228,10 @@ public class ChDictionary extends ChAbstractStatement implements IRelation {
     @Override
     public void computeHash(Hasher hasher) {
         hasher.put(sourceType);
-        hasher.put(lifeTime);
-        hasher.put(layOut);
-        hasher.put(pk);
-        hasher.put(range);
+        hasher.put(lifeTimeNormalized);
+        hasher.put(layOutNormalized);
+        hasher.put(pkNormalized);
+        hasher.put(rangeNormalized);
         hasher.putOrdered(columns);
         hasher.put(sources);
         hasher.put(options);
@@ -202,10 +244,10 @@ public class ChDictionary extends ChAbstractStatement implements IRelation {
         }
         return obj instanceof ChDictionary dictn && super.compare(dictn)
                 && Objects.equals(sourceType, dictn.sourceType)
-                && Objects.equals(lifeTime, dictn.lifeTime)
-                && Objects.equals(layOut, dictn.layOut)
-                && Objects.equals(pk, dictn.pk)
-                && Objects.equals(range, dictn.range)
+                && Objects.equals(lifeTimeNormalized, dictn.lifeTimeNormalized)
+                && Objects.equals(layOutNormalized, dictn.layOutNormalized)
+                && Objects.equals(pkNormalized, dictn.pkNormalized)
+                && Objects.equals(rangeNormalized, dictn.rangeNormalized)
                 && Objects.equals(columns, dictn.columns)
                 && Objects.equals(sources, dictn.sources)
                 && Objects.equals(options, dictn.options);
@@ -215,10 +257,10 @@ public class ChDictionary extends ChAbstractStatement implements IRelation {
     protected AbstractStatement getCopy() {
         var copy = new ChDictionary(name);
         copy.setSourceType(sourceType);
-        copy.setLifeTime(lifeTime);
-        copy.setLayOut(layOut);
-        copy.setPk(pk);
-        copy.setRange(range);
+        copy.setLifeTime(lifeTime, lifeTimeNormalized);
+        copy.setLayOut(layOut, layOutNormalized);
+        copy.setPk(pk, pkNormalized);
+        copy.setRange(range, rangeNormalized);
         for (var colSrc : columns) {
             copy.addColumn((ChColumn) colSrc.deepCopy());
         }
