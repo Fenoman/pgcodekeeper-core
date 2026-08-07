@@ -43,6 +43,11 @@ public class MsDumpLoader extends AbstractDumpLoader<MsDatabase> {
         super(inputFile, settings);
     }
 
+    MsDumpLoader(Path inputFile, ISettings settings,
+            Queue<AntlrTask<?>> inheritedTasks) {
+        super(inputFile, settings, inheritedTasks);
+    }
+
     @Override
     protected MsDatabase createDatabase() {
         return new MsDatabase();
@@ -63,6 +68,7 @@ public class MsDumpLoader extends AbstractDumpLoader<MsDatabase> {
             l.setWorkDirs(workDirs);
             listener = l;
         }
-        MsParserUtils.parseSqlStream(input, databaseName, settings, monitoringLevel, listener, antlrTasks);
+        MsParserUtils.parseSqlStream(inputStreamProvider(), databaseName,
+                settings, monitoringLevel, listener, antlrTasks);
     }
 }

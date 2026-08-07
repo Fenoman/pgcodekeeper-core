@@ -43,6 +43,11 @@ public class ChDumpLoader extends AbstractDumpLoader<ChDatabase> {
         super(inputFile, settings);
     }
 
+    ChDumpLoader(Path inputFile, ISettings settings,
+            Queue<AntlrTask<?>> inheritedTasks) {
+        super(inputFile, settings, inheritedTasks);
+    }
+
     @Override
     protected ChDatabase createDatabase() {
         return new ChDatabase();
@@ -63,6 +68,7 @@ public class ChDumpLoader extends AbstractDumpLoader<ChDatabase> {
             l.setWorkDirs(workDirs);
             listener = l;
         }
-        ChParserUtils.parseSqlStream(input, databaseName, settings, monitoringLevel, listener, antlrTasks);
+        ChParserUtils.parseSqlStream(inputStreamProvider(), databaseName,
+                settings, monitoringLevel, listener, antlrTasks);
     }
 }

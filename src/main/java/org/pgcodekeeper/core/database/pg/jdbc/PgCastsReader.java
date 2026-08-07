@@ -15,7 +15,6 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.pg.jdbc;
 
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
@@ -129,11 +128,6 @@ public final class PgCastsReader extends PgAbstractJdbcReader {
     }
 
     @Override
-    protected void setQueryParams(PreparedStatement statement) throws SQLException {
-        statement.setLong(1, loader.getLastSysOid());
-    }
-
-    @Override
     public String getClassId() {
         return "pg_cast";
     }
@@ -150,7 +144,7 @@ public final class PgCastsReader extends PgAbstractJdbcReader {
                 .column("res.castcontext")
                 .column("res.castmethod")
                 .from("pg_catalog.pg_cast res")
-                .where("res.oid > ?");
+                .where("res.oid > " + loader.getLastSysOid());
 
         if (PgSupportedVersion.VERSION_14.isLE(loader.getVersion())) {
             builder.where("NOT EXISTS (SELECT 1 FROM pg_range r WHERE res.castsource = r.rngtypid AND res.casttarget = r.rngmultitypid)");

@@ -15,6 +15,7 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.base.jdbc;
 
+import java.io.IOException;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -27,6 +28,7 @@ import org.pgcodekeeper.core.exception.ConcurrentModificationException;
 import org.pgcodekeeper.core.exception.XmlReaderException;
 import org.pgcodekeeper.core.localizations.Messages;
 import org.pgcodekeeper.core.monitor.IMonitor;
+import org.pgcodekeeper.core.utils.PhaseTimer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,23 +44,86 @@ public abstract class AbstractSearchPathJdbcReader<T extends AbstractJdbcLoader<
 
     @Override
     public void read() throws SQLException, InterruptedException, XmlReaderException {
+        loader.checkCatalogReaderCancellation();
         loader.setCurrentOperation(Messages.AbstractStatementReader_start + getClass().getSimpleName());
         QueryBuilder builder = makeQuery();
         if (builder == null) {
+            loader.checkCatalogReaderCancellation();
             return;
         }
 
+        long start = PhaseTimer.start();
         String query = builder.build();
-        try (PreparedStatement statement = loader.getConnection().prepareStatement(query)) {
+
+        ICatalogRowCache rowCache = loader.getCatalogRowCache();
+        if (rowCache != null && readThroughRowCache(rowCache, query,
+                builder.hasExplicitOrder())) {
+            loader.checkCatalogReaderCancellation();
+            PhaseTimer.end("jdbc_reader", start, getClass().getSimpleName());
+            return;
+        }
+
+        PreparedStatement statement = null;
+        ResultSet result = null;
+        Throwable failure = null;
+        try {
+            statement = loader.prepareCatalogStatement(query);
+            loader.registerCatalogStatement(statement);
             setQueryParams(statement);
-            ResultSet result = loader.getRunner().runScript(statement);
+            result = loader.getRunner().runScript(statement);
             IMonitor monitor = loader.getMonitor();
             while (result.next()) {
                 IMonitor.checkCancelled(monitor);
                 monitor.worked(1);
                 processResult(result);
+                try {
+                    loader.tryFinishAntlrTask();
+                } catch (IOException ex) {
+                    throw new XmlReaderException(ex.getLocalizedMessage(), ex);
+                }
             }
+        } catch (SQLException | InterruptedException | XmlReaderException | RuntimeException | Error ex) {
+            failure = ex;
         }
+        AbstractJdbcReader.finishCatalogRead(loader, result, statement, failure);
+        loader.checkCatalogReaderCancellation();
+        PhaseTimer.end("jdbc_reader", start, getClass().getSimpleName());
+    }
+
+    /**
+     * Consumes the reader's rows through the row-level cache pipeline with
+     * the exact per-row loop body of the plain path. Failures classify
+     * through the shared catalog-read finisher, so cancellation identity is
+     * preserved. A {@code false} return means the cache disengaged before
+     * any row was consumed and the plain path must run.
+     */
+    private boolean readThroughRowCache(ICatalogRowCache rowCache, String query,
+            boolean explicitOrder)
+            throws SQLException, InterruptedException, XmlReaderException {
+        boolean handled = false;
+        Throwable failure = null;
+        try {
+            IMonitor monitor = loader.getMonitor();
+            handled = rowCache.read(getClass().getSimpleName(), query,
+                    explicitOrder
+                            ? ICatalogRowCache.CatalogQueryOrder.EXPLICIT_ORDER_BY
+                            : ICatalogRowCache.CatalogQueryOrder.UNSPECIFIED,
+                    row -> {
+                        IMonitor.checkCancelled(monitor);
+                        monitor.worked(1);
+                        processResult(row);
+                        try {
+                            loader.tryFinishAntlrTask();
+                        } catch (IOException ex) {
+                            throw new XmlReaderException(
+                                    ex.getLocalizedMessage(), ex);
+                        }
+                    }, query.indexOf('?') < 0 ? null : this::setQueryParams);
+        } catch (SQLException | InterruptedException | XmlReaderException | RuntimeException | Error ex) {
+            failure = ex;
+        }
+        AbstractJdbcReader.finishCatalogRead(loader, null, null, failure);
+        return handled;
     }
 
     private void processResult(ResultSet result) throws SQLException, XmlReaderException {

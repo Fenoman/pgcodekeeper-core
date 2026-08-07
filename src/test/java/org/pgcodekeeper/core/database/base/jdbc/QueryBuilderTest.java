@@ -16,10 +16,24 @@
 package org.pgcodekeeper.core.database.base.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class QueryBuilderTest {
+
+    @Test
+    void exposesOnlyExplicitTopLevelOrderingForCacheReplay() {
+        QueryBuilder unordered = new QueryBuilder()
+                .column("array_agg(v ORDER BY v)")
+                .from("data");
+        QueryBuilder ordered = unordered.copy().orderBy("id");
+
+        assertFalse(unordered.hasExplicitOrder());
+        assertTrue(ordered.hasExplicitOrder());
+        assertTrue(ordered.copy().hasExplicitOrder());
+    }
 
     @Test
     void testColumns() {

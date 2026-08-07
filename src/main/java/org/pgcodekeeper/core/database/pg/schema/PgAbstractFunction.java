@@ -59,6 +59,12 @@ public abstract class PgAbstractFunction extends PgAbstractStatement implements 
     private String executeOn;
     private String signatureCache;
     private boolean inStatementBody;
+    /**
+     * Set when a late-bound body analysis was skipped, leaving {@code deps}
+     * intentionally without body-derived entries. Comparison bookkeeping only:
+     * never copied, hashed or compared.
+     */
+    private transient boolean bodyDependencyStateSuppressed;
 
     protected PgAbstractFunction(String name) {
         super(name);
@@ -100,7 +106,37 @@ public abstract class PgAbstractFunction extends PgAbstractStatement implements 
     }
 
     protected boolean isNeedDepcies(PgAbstractFunction newFunction) {
+        if (bodyDependencyStateSuppressed) {
+            // The skipped late-bound body left this dependency set without
+            // body-derived entries, so a set comparison would force the
+            // dependency-driven alter ceremony for practically every changed
+            // routine. A late-bound body needs no such ceremony: the server
+            // accepts it without validating references, so a plain
+            // CREATE OR REPLACE is always sufficient.
+            return false;
+        }
         return !deps.equals(newFunction.deps);
+    }
+
+    /**
+     * Marks that this routine's late-bound body analysis was skipped and its
+     * dependency set intentionally lacks body-derived entries.
+     */
+    public void suppressBodyDependencyState() {
+        bodyDependencyStateSuppressed = true;
+    }
+
+    /**
+     * Returns whether this routine's late-bound body analysis was skipped, i.e.
+     * whether the dependency edges its body would contribute are missing.
+     * The state is comparison bookkeeping of a single loaded model: it is not
+     * carried over by {@link #shallowCopy()}, so it must be read from the
+     * analyzed statement itself, never from a graph copy of it.
+     *
+     * @return true if the body was not analyzed and its dependencies are absent
+     */
+    public boolean isBodyDependencyStateSuppressed() {
+        return bodyDependencyStateSuppressed;
     }
 
     protected void appendFunctionFullSQL(StringBuilder sbSQL) {
@@ -345,6 +381,14 @@ public abstract class PgAbstractFunction extends PgAbstractStatement implements 
     public void setBody(final String body) {
         this.body = body;
         resetHash();
+    }
+
+    /**
+     * Checks exact immutable body ownership without exposing the body value.
+     * Used to reject stale library launchers while sealing a project catalog.
+     */
+    public boolean hasBodyReference(String candidate) {
+        return body == candidate;
     }
 
     /**

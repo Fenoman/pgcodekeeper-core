@@ -26,6 +26,7 @@ import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation.LocationType;
 import org.pgcodekeeper.core.database.base.parser.QNameParser;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
+import org.pgcodekeeper.core.exception.ExcludedSchemaException;
 import org.pgcodekeeper.core.exception.MisplacedObjectException;
 import org.pgcodekeeper.core.exception.UnresolvedReferenceException;
 import org.pgcodekeeper.core.localizations.Messages;
@@ -382,6 +383,17 @@ public abstract class ParserAbstract<S extends IDatabase> {
         }
 
         ParserRuleContext firstNameCtx = QNameParser.getFirstNameCtx(ids);
+        String schemaName = schemaCtx.getText();
+        if (settings.isAdditionalSchemaExcluded(schemaName)) {
+            // A flat project layout encodes the schema in the file name, and
+            // "a.b.c.sql" cannot be split into schema and object parts before
+            // parsing, so the loader deliberately keeps such an ambiguous file
+            // rather than guessing. Only the parser knows the real schema name:
+            // drop the statement exactly like a missing schema would, but
+            // without reporting an error for an object the caller asked not to
+            // load. Callers that set no exclusions never reach this branch.
+            throw new ExcludedSchemaException(schemaName, firstNameCtx.start);
+        }
         throw new UnresolvedReferenceException("Schema not found for " +
                 getFullCtxText(ids), firstNameCtx.start);
     }

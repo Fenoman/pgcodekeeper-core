@@ -19,6 +19,7 @@ import java.util.AbstractMap.SimpleEntry;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -61,7 +62,7 @@ public abstract class MsAbstractExprWithNmspc<T> extends MsAbstractExpr {
      * It has to be separate since same-named unaliased tables from different
      * schemas can be used, requiring qualification.
      */
-    private final Set<ObjectReference> unaliasedNamespace = new HashSet<>();
+    private final Set<ObjectReference> unaliasedNamespace = new LinkedHashSet<>();
     /**
      * CTE names that current level of FROM has access to.
      */

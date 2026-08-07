@@ -137,6 +137,35 @@ class PgPartialExporterTest {
         walkAndCompare(exportDirFull, exportDirPartial, info);
     }
 
+    /**
+     * A partial export must leave an already-current version marker completely untouched.
+     * <p>
+     * The marker is a configuration input of the Eclipse project index: rewriting it with identical content still bumps
+     * its resource timestamp, and that alone downgrades the next build from an incremental update to a full reindex of
+     * the whole project. The content must stay byte-identical either way.
+     */
+    @org.junit.jupiter.api.Test
+    void testPartialExportLeavesCurrentMarkerUntouched(@TempDir Path exportDir) throws Exception {
+        var settings = new CoreSettings();
+        TreeElement tree = DiffTree.create(settings, dbSource, dbTarget);
+        new PgModelExporter(exportDir, dbSource, Consts.UTF_8, settings).exportFull();
+
+        Path marker = exportDir.resolve(Consts.FILENAME_WORKING_DIR_MARKER);
+        byte[] before = Files.readAllBytes(marker);
+        var stamp = java.nio.file.attribute.FileTime.fromMillis(1_000_000_000_000L);
+        Files.setLastModifiedTime(marker, stamp);
+
+        new PartialExportInfoImpl1().setUserSelection(tree);
+        Collection<TreeElement> list = new TreeFlattener().onlySelected()
+                .onlyEdits(dbSource, dbTarget).flatten(tree);
+        new PgModelExporter(exportDir, dbTarget, dbSource, list, Consts.UTF_8, settings).exportPartial();
+
+        Assertions.assertArrayEquals(before, Files.readAllBytes(marker),
+                "partial export must keep the marker byte-identical");
+        Assertions.assertEquals(stamp, Files.getLastModifiedTime(marker),
+                "partial export must not rewrite an already-current marker");
+    }
+
     private static Stream<Arguments> generator() {
         return Stream.of(
                 Arguments.of(new PartialExportInfoImpl1()),

@@ -15,6 +15,7 @@
  *******************************************************************************/
 package org.pgcodekeeper.core.database.pg.loader;
 
+import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.base.loader.AbstractDumpLoader;
 import org.pgcodekeeper.core.database.base.parser.AntlrTask;
 import org.pgcodekeeper.core.database.pg.parser.IPgContextProcessor;
@@ -35,17 +36,32 @@ import java.util.Queue;
  */
 public class PgDumpLoader extends AbstractDumpLoader<PgDatabase> {
 
+    private final boolean sortColumnsAfterParse;
+
     public PgDumpLoader(InputStreamProvider input, String inputObjectName, ISettings settings) {
         super(input, inputObjectName, settings);
+        sortColumnsAfterParse = true;
     }
 
     public PgDumpLoader(Path inputFile, ISettings settings) {
+        this(inputFile, settings, true);
+    }
+
+    PgDumpLoader(Path inputFile, ISettings settings, boolean sortColumnsAfterParse) {
         super(inputFile, settings);
+        this.sortColumnsAfterParse = sortColumnsAfterParse;
+    }
+
+    protected PgDumpLoader(Path inputFile, ISettings settings,
+            boolean sortColumnsAfterParse, Queue<AntlrTask<?>> inheritedTasks) {
+        super(inputFile, settings, inheritedTasks);
+        this.sortColumnsAfterParse = sortColumnsAfterParse;
     }
 
     @Override
     protected PgDatabase createDatabase() {
-        return new PgDatabase();
+        return new PgDatabase(mode == ParserListenerMode.SCRIPT
+                || settings.isCollectObjectReferences());
     }
 
     @Override
@@ -59,10 +75,12 @@ public class PgDumpLoader extends AbstractDumpLoader<PgDatabase> {
         if (overrides != null) {
             listener = new PgOverridesListener(db, databaseName, mode, settings, overrides);
         } else {
-            var l = new PgCustomParserListener(db, databaseName, mode, settings, antlrTasks);
+            var l = new PgCustomParserListener(db, databaseName, mode, settings, antlrTasks,
+                    sortColumnsAfterParse);
             l.setWorkDirs(workDirs);
             listener = l;
         }
-        PgParserUtils.parseSqlStream(input, databaseName, settings, monitoringLevel, listener, antlrTasks);
+        PgParserUtils.parseSqlStream(inputStreamProvider(), databaseName,
+                settings, monitoringLevel, listener, antlrTasks);
     }
 }

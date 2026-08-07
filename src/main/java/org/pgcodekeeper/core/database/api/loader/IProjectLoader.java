@@ -18,7 +18,7 @@ package org.pgcodekeeper.core.database.api.loader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collection;
-
+import java.util.List;
 import org.pgcodekeeper.core.database.api.schema.IDatabase;
 
 /**
@@ -34,4 +34,33 @@ public interface IProjectLoader extends ILoader {
      * @return database populated from the given files only
      */
     IDatabase loadFiles(Collection<Path> files) throws IOException, InterruptedException;
+
+    /**
+     * Acknowledges that common project configuration was contributed before
+     * loader construction. The factory owner calls this on its owner thread
+     * before publishing the loader. Implementations must make repeated calls
+     * idempotent.
+     * <p>
+     * The default rejects factory use explicitly so older third-party project
+     * loaders cannot silently scan shared settings from a worker thread.
+     */
+    default void markCommonConfigurationContributed() {
+        throw new UnsupportedOperationException(
+                "Project loader does not support common configuration acknowledgment");
+    }
+
+    /**
+     * Enumerates the local SQL files that this loader would dispatch for the
+     * project and its overrides, applying the same layout, schema and
+     * root-relative file filters as a real load. External libraries are not
+     * included.
+     *
+     * @return immutable paths in loader dispatch order
+     * @throws IOException if project configuration or directories cannot be read
+     * @throws InterruptedException if enumeration is cancelled
+     */
+    default List<Path> listInputFiles() throws IOException, InterruptedException {
+        throw new UnsupportedOperationException(
+                "Project loader does not support input enumeration");
+    }
 }

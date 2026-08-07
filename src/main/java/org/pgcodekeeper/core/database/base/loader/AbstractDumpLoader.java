@@ -16,6 +16,7 @@
 package org.pgcodekeeper.core.database.base.loader;
 
 import org.pgcodekeeper.core.database.api.loader.IDumpLoader;
+import org.pgcodekeeper.core.database.api.loader.ProjectInputFingerprint;
 import org.pgcodekeeper.core.database.api.parser.ParserListenerMode;
 import org.pgcodekeeper.core.database.api.project.IWorkDirs;
 import org.pgcodekeeper.core.database.api.schema.*;
@@ -30,7 +31,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
+import java.util.function.Consumer;
 
 /**
  * Base database dump loader
@@ -42,11 +45,12 @@ public abstract class AbstractDumpLoader<T extends IDatabase> extends AbstractLo
     protected ParserListenerMode mode = ParserListenerMode.NORMAL;
     protected Map<AbstractStatement, StatementOverride> overrides;
     protected IWorkDirs workDirs;
+    private InputStreamProvider fingerprintingInput;
 
     protected AbstractDumpLoader(InputStreamProvider input, String databaseName,
                                  ISettings settings, int monitoringLevel) {
         super(settings, databaseName);
-        this.input = input;
+        this.input = Objects.requireNonNull(input, "input");
         this.monitoringLevel = monitoringLevel;
     }
 
@@ -56,6 +60,13 @@ public abstract class AbstractDumpLoader<T extends IDatabase> extends AbstractLo
 
     protected AbstractDumpLoader(Path inputFile, ISettings settings) {
         this(() -> Files.newInputStream(inputFile), inputFile.toString(), settings, 1);
+    }
+
+    protected AbstractDumpLoader(Path inputFile, ISettings settings,
+            Queue<AntlrTask<?>> inheritedTasks) {
+        super(settings, inputFile.toString(), inheritedTasks);
+        this.input = () -> Files.newInputStream(inputFile);
+        this.monitoringLevel = 1;
     }
 
     @Override
@@ -94,5 +105,22 @@ public abstract class AbstractDumpLoader<T extends IDatabase> extends AbstractLo
 
     public void setWorkDirs(IWorkDirs workDirs) {
         this.workDirs = workDirs;
+    }
+
+    final void captureInputFingerprint(Path path,
+            Consumer<ProjectInputFingerprint> sink) {
+        var provider =
+                new FingerprintingInputStreamProvider(input);
+        provider.capture(path, sink);
+        fingerprintingInput = provider;
+    }
+
+    /**
+     * Returns the original provider in ordinary loads and the capture wrapper
+     * only when project fingerprinting was explicitly enabled.
+     */
+    protected final InputStreamProvider inputStreamProvider() {
+        return fingerprintingInput == null
+                ? input : fingerprintingInput;
     }
 }

@@ -28,6 +28,7 @@ import org.pgcodekeeper.core.database.api.schema.IDatabase;
 import org.pgcodekeeper.core.database.api.schema.ObjectLocation;
 import org.pgcodekeeper.core.database.base.parser.statement.ParserAbstract;
 import org.pgcodekeeper.core.database.base.schema.AbstractStatement;
+import org.pgcodekeeper.core.exception.ExcludedSchemaException;
 import org.pgcodekeeper.core.exception.MisplacedObjectException;
 import org.pgcodekeeper.core.exception.MonitorCancelledRuntimeException;
 import org.pgcodekeeper.core.exception.ObjectCreationException;
@@ -91,11 +92,19 @@ public class CustomParserListener<T extends IDatabase> {
     }
 
     protected void safeParseStatement(Runnable r, ParserRuleContext ctx) {
+        if (getMonitor().isCancelled()) {
+            throw new MonitorCancelledRuntimeException();
+        }
         try {
-            if (getMonitor().isCancelled()) {
-                throw new MonitorCancelledRuntimeException();
-            }
             r.run();
+        } catch (MonitorCancelledRuntimeException ex) {
+            throw ex;
+        } catch (ExcludedSchemaException ex) {
+            // The caller excluded this schema before parsing. An ambiguous
+            // flat project file cannot be filtered by name alone, so the drop
+            // happens here and is not a project error.
+            LOG.debug("Skipped statement of excluded schema {} in {}",
+                    ex.getSchemaName(), filename);
         } catch (UnresolvedReferenceException ex) {
             settings.addError(handleUnresolvedReference(ex, filename));
         } catch (Exception e) {

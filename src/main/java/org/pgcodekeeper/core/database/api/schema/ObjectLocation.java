@@ -122,6 +122,15 @@ public class ObjectLocation extends ContextLocation {
         return sql;
     }
 
+    /**
+     * Returns the alias used by this occurrence, if one was specified.
+     *
+     * @return exact alias or {@code null}
+     */
+    public String getAlias() {
+        return alias;
+    }
+
     public LocationType getLocationType() {
         return locationType;
     }
@@ -269,6 +278,7 @@ public class ObjectLocation extends ContextLocation {
         private int offset;
         private int lineNumber;
         private int charPositionInLine;
+        private Integer length;
         private ObjectReference reference;
         private ParserRuleContext ctx;
         private ParserRuleContext endCtx;
@@ -309,6 +319,21 @@ public class ObjectLocation extends ContextLocation {
             return this;
         }
 
+        /**
+         * Sets an exact source span length when reconstructing a location
+         * without its original parser tokens.
+         *
+         * @param length nonnegative source span length
+         * @return this builder
+         */
+        public Builder setLength(int length) {
+            if (length < 0) {
+                throw new IllegalArgumentException("Location length must not be negative");
+            }
+            this.length = length;
+            return this;
+        }
+
         public Builder setReference(ObjectReference reference) {
             this.reference = reference;
             return this;
@@ -341,14 +366,16 @@ public class ObjectLocation extends ContextLocation {
                 int line = start.getLine();
                 int position = start.getCodeUnitPositionInLine();
                 CodeUnitToken stop = (CodeUnitToken) (endCtx != null ? endCtx : ctx).getStop();
-                int length = stop.getCodeUnitStop() - startOffset + 1;
+                int objectLength = length != null ? length
+                        : stop.getCodeUnitStop() - startOffset + 1;
                 return new ObjectLocation(filePath, startOffset, line, position,
-                        reference, action, sql, alias, length, locationType);
+                        reference, action, sql, alias, objectLength, locationType);
             }
 
-            int length = reference == null ? 0 : reference.getName().length();
+            int objectLength = length != null ? length
+                    : reference == null ? 0 : reference.getName().length();
             return new ObjectLocation(filePath, offset, lineNumber, charPositionInLine,
-                    reference, action, sql, alias, length, locationType);
+                    reference, action, sql, alias, objectLength, locationType);
         }
     }
 }

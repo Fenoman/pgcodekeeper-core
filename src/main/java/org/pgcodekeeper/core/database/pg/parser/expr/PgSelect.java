@@ -18,7 +18,7 @@ package org.pgcodekeeper.core.database.pg.parser.expr;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.function.Predicate;
@@ -110,7 +110,14 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
             analyzeCte(with);
         }
 
-        List<ModPair<String, String>> ret = selectOps(select.selectOps(), recursiveCteCtx);
+        PgSelectOps ops = select.selectOps();
+        List<ModPair<String, String>> ret;
+        if (ops == null) {
+            log(select.getCtx(), Messages.Select_log_not_alter_selectops);
+            ret = Collections.emptyList();
+        } else {
+            ret = selectOps(ops, recursiveCteCtx);
+        }
 
         selectAfterOps(select.afterOps());
 
@@ -369,7 +376,14 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
     }
 
     private void groupBy(Grouping_element_listContext list, PgValueExpr vex) {
-        PgValueExpr child = new PgValueExpr(this, new HashSet<>());
+        // the buffer is iterated below to republish its dependencies, so it must
+        // preserve analysis order: a plain HashSet would iterate in hash order,
+        // and ObjectLocation folds ObjectReference into its hash, whose DbObjType
+        // component hashes to the JVM identity hash of the enum constant. That
+        // value is drawn from a per-thread generator and therefore differs
+        // between runs, which permuted the emitted GROUP BY primary key
+        // dependencies and made generated scripts irreproducible.
+        PgValueExpr child = new PgValueExpr(this, new LinkedHashSet<>());
 
         for (Grouping_elementContext el : list.grouping_element()) {
             VexContext vexCtx = el.vex();
@@ -489,6 +503,13 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
     }
 
     private void from(From_itemContext fromItem) {
+        // ANTLR recovery may leave a missing FROM operand as a null child.
+        // The parser diagnostic already describes the invalid SQL, so keep
+        // analyzing any intact SELECT/set-operation branches instead of NPEing.
+        if (fromItem == null) {
+            return;
+        }
+
         From_primaryContext primary;
 
         if (fromItem.LEFT_PAREN() != null && fromItem.RIGHT_PAREN() != null) {
@@ -552,7 +573,7 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
                     lateralAllowed = primary.LATERAL() != null;
                     List<ModPair<String, String>> columnList = new PgSelect(this).analyze(subquery.select_stmt());
 
-                    var aliasCtx = alias.alias;
+                    var aliasCtx = alias == null ? null : alias.alias;
                     if (aliasCtx != null) {
                         String tableSubQueryAlias = aliasCtx.getText();
                         addReference(tableSubQueryAlias, null);
@@ -564,6 +585,11 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
                         }
 
                         complexNamespace.put(tableSubQueryAlias, new ArrayList<>(columnList));
+                    } else if (alias == null) {
+                        // FROM subquery without an alias, allowed since PostgreSQL 16:
+                        // the subquery is not addressable by name, but its output
+                        // columns stay visible unqualified in the containing query
+                        addUnnamedSubqueryColumns(columnList);
                     }
                 } finally {
                     lateralAllowed = oldLateral;
@@ -594,43 +620,71 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
     }
 
     private void fromRowsFunction(From_rows_with_aliasContext fromRows) {
-        for (var function : fromRows.function_call()) {
-            PgValueExpr vexFunc = new PgValueExpr(this);
-            Pair<String, String> func = vexFunc.function(function);
-            if (func.getFirst() != null) {
-                String funcName = func.getFirst();
-                addReference(funcName, null);
-            }
-        }
-        var alias = fromRows.alias.getText();
-        addReference(alias, null);
-
         List<Pair<String, String>> colPairs = new ArrayList<>();
-        fromRows.column_alias
-                .forEach(identifier -> colPairs.add(new ModPair<>(identifier.getText(), PgTypesSetManually.COLUMN)));
+        String implicitAlias = null;
+        var functions = fromRows.function_call();
+        for (int i = 0; i < functions.size(); i++) {
+            Function_callContext function = functions.get(i);
+            var signature = functionSignature(function, null,
+                    getRowsFunctionDefinition(fromRows, function));
+            if (signature == null) {
+                continue;
+            }
 
-        var definitions = fromRows.from_function_column_def();
-        var definition = definitions.isEmpty() ? null : definitions.get(0);
-        var types = function(fromRows.function_call(0), fromRows.alias, definition);
-        if (types == null) {
-            complexNamespace.put(alias, colPairs);
+            if (i == 0) {
+                implicitAlias = signature.getFirst();
+            }
+            colPairs.addAll(signature.getSecond());
+        }
+
+        if (fromRows.ORDINALITY() != null) {
+            colPairs.add(new Pair<>("ordinality", PgTypesSetManually.BIGINT));
+        }
+
+        for (int i = 0; i < fromRows.column_alias.size() && i < colPairs.size(); i++) {
+            colPairs.set(i, new Pair<>(fromRows.column_alias.get(i).getText(),
+                    colPairs.get(i).getSecond()));
+        }
+
+        String alias = fromRows.alias == null ? implicitAlias : fromRows.alias.getText();
+        if (alias == null) {
             return;
         }
 
-        for (int i = 0; i < colPairs.size() && i < types.getSecond().size(); i++) {
-            colPairs.set(i, new Pair<>(colPairs.get(i).getFirst(), types.getSecond().get(i).getSecond()));
-        }
-
+        addReference(alias, null);
         complexNamespace.put(alias, colPairs);
+    }
+
+    private From_function_column_defContext getRowsFunctionDefinition(
+            From_rows_with_aliasContext fromRows, Function_callContext function) {
+        for (int i = 0; i + 2 < fromRows.getChildCount(); i++) {
+            if (fromRows.getChild(i) == function
+                    && fromRows.getChild(i + 2) instanceof From_function_column_defContext definition) {
+                return definition;
+            }
+        }
+        return null;
     }
 
     private Pair<String, List<Pair<String, String>>> function(Function_callContext function, IdentifierContext alias,
                                                               From_function_column_defContext definition) {
+        String explicitAlias = alias == null ? null : alias.getText();
+        var signature = functionSignature(function, explicitAlias, definition);
+        if (signature == null) {
+            return null;
+        }
+
+        String funcAlias = explicitAlias == null ? signature.getFirst() : explicitAlias;
+        addReference(funcAlias, null);
+        return new Pair<>(funcAlias, signature.getSecond());
+    }
+
+    private Pair<String, List<Pair<String, String>>> functionSignature(Function_callContext function,
+            String columnName, From_function_column_defContext definition) {
         PgValueExpr vexFunc = new PgValueExpr(this);
         Pair<String, String> func = vexFunc.function(function);
         if (func.getFirst() != null) {
-            String funcAlias = alias == null ? func.getFirst() : alias.getText();
-            addReference(funcAlias, null);
+            String effectiveColumnName = columnName == null ? func.getFirst() : columnName;
 
             var returns = func.getSecond();
             List<Pair<String, String>> colPairs = new ArrayList<>();
@@ -639,17 +693,17 @@ public final class PgSelect extends PgAbstractExprWithNmspc<Select_stmtContext> 
                     colPairs.add(new Pair<>(definition.column_alias.get(i).getText(), definition.data_type().get(i).getText()));
                 }
             } else if (returns.contains(".")) {
-                colPairs = setOfFunction(funcAlias, returns);
+                colPairs = setOfFunction(effectiveColumnName, returns);
             } else {
                 List<Pair<String, String>> returnTableCols = vexFunc.getReturningTableColumns();
                 if (returnTableCols.isEmpty()) {
-                    colPairs.add(new Pair<>(funcAlias, func.getSecond()));
+                    colPairs.add(new Pair<>(effectiveColumnName, func.getSecond()));
                 } else {
                     colPairs = returnTableCols;
                 }
             }
 
-            return new Pair<>(funcAlias, colPairs);
+            return new Pair<>(func.getFirst(), colPairs);
         }
         return null;
     }

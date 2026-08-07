@@ -145,6 +145,16 @@ public final class MetaFunction extends MetaStatement implements IFunction {
         orderBy.add(type);
     }
 
+    /**
+     * Returns the direct arguments of an ordered-set aggregate.
+     *
+     * @return defensive argument copies in their declaration order
+     */
+    public List<Argument> getOrderBy() {
+        return orderBy == null ? Collections.emptyList()
+                : orderBy.stream().map(Argument::getCopy).toList();
+    }
+
     @Override
     public String getReturns() {
         return returns;

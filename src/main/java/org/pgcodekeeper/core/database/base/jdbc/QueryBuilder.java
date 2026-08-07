@@ -203,6 +203,17 @@ public final class QueryBuilder {
     }
 
     /**
+     * Returns whether this query has an explicit top-level ordering. Nested
+     * aggregate or subquery ordering does not make the outer row order
+     * deterministic and is deliberately not inferred from rendered SQL.
+     *
+     * @return true when at least one top-level {@link #orderBy(String)} was added
+     */
+    public boolean hasExplicitOrder() {
+        return !orders.isEmpty();
+    }
+
+    /**
      * Builds and returns the complete SQL query string.
      *
      * @return the constructed SQL query
@@ -267,6 +278,7 @@ public final class QueryBuilder {
         copy.joins.addAll(joins);
         copy.wheres.addAll(wheres);
         copy.groups.addAll(groups);
+        copy.orders.addAll(orders);
         copy.postAction = postAction;
 
         return copy;

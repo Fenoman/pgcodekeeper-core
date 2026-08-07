@@ -87,6 +87,30 @@ public record ObjectReference(String schema, String table, String column, DbObjT
         return sb.toString();
     }
 
+    /**
+     * Replaces the record-generated hash so that it stays identical between JVM
+     * runs. The generated hash mixes in {@code type.hashCode()}, and
+     * {@link Enum#hashCode()} is final and returns the JVM identity hash, which
+     * is drawn from a per-thread generator and therefore varies from run to run.
+     * Any hash container keyed by this record - or by a key that folds it in,
+     * such as {@link ObjectLocation} - would then iterate in a different order on
+     * every run. Hashing the stable {@link DbObjType#ordinal()} keeps such
+     * iterations reproducible. Stays consistent with the generated
+     * {@code equals}: equal references have equal ordinals.
+     *
+     * @return run-stable hash code
+     */
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + (schema == null ? 0 : schema.hashCode());
+        result = prime * result + (table == null ? 0 : table.hashCode());
+        result = prime * result + (column == null ? 0 : column.hashCode());
+        result = prime * result + (type == null ? 0 : type.ordinal());
+        return result;
+    }
+
     @Override
     public String toString() {
         return getFullName() + " (" + type + ')';
