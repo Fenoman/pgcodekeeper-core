@@ -95,6 +95,25 @@ public abstract class CodeUnitLexer extends Lexer {
         }
     }
 
+    /**
+     * Returns how far the UTF-16 code unit positions of the current line have
+     * run ahead of the code point positions ANTLR counts, which is one per
+     * astral character already emitted on this line.
+     * <p>
+     * {@link #emit()} adds this to {@code _tokenStartCharPositionInLine} to get
+     * the code unit position of a token. A lexer error has no token to carry
+     * that number, so {@code CustomAntlrErrorListener} adds it the same way to
+     * the code point position ANTLR hands it.
+     * <p>
+     * Zero unless the stream actually holds astral characters, so the two
+     * scales coincide everywhere else.
+     *
+     * @return the code unit to code point drift of the current line
+     */
+    int getCurrentLineOffset() {
+        return currentLineOffset;
+    }
+
     private CodeUnitToken emitToken(CodeUnitToken token) {
         emit(token);
         currentLineOffset = prevLineOffset;

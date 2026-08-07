@@ -105,17 +105,56 @@ public final class PgConstraintsReader extends PgAbstractSearchPathJdbcReader {
         String definition = res.getString("definition");
         IPgJdbcReader.checkObjectValidity(definition, DbObjType.CONSTRAINT, constraintName);
         String tablespace = res.getString("spcname");
+        // the catalog's own clause is stored here and unconditionally, before
+        // the task is submitted: the finalizer below runs only when this task's
+        // parse reported no errors (AbstractJdbcLoader:377), while the
+        // constraint reaches its container either way. Without it a CHECK whose
+        // expression this grammar cannot read is written out as CHECK (null) - a
+        // constraint the server accepts and which forbids nothing - and an
+        // EXCLUDE whose clause it cannot read is written out as the bare word
+        // EXCLUDE, which no server accepts at all. The finalizer drops it once
+        // the model carries the parsed halves
+        setCatalogDefinition(constr, getTextWithCheckNewLines(definition));
         loader.submitAntlrTask(ADD_CONSTRAINT + definition + ';',
                 p -> new Pair<>(p.sql().statement(0).schema_statement().schema_alter()
                         .alter_table_statement().table_action(0), (CommonTokenStream) p.getTokenStream()),
-                pair -> new PgAlterTable(null, (PgDatabase) schema.getDatabase(), tablespace, pair.getSecond(),
-                        loader.getSettings())
-                        .parseAlterTableConstraint(
-                                pair.getFirst(), constr, schemaName, tableName, loader.getCurrentLocation()));
+                // the statement is built from a constraint definition and
+                // carries one action, so it never names an access method
+                pair -> {
+                    new PgAlterTable(null, (PgDatabase) schema.getDatabase(), tablespace, null, pair.getSecond(),
+                            loader.getSettings())
+                            .parseAlterTableConstraint(
+                                    pair.getFirst(), constr, schemaName, tableName, loader.getCurrentLocation());
+                    setCatalogDefinition(constr, null);
+                });
         loader.setAuthor(constr, res);
         loader.setComment(constr, res);
 
         cont.addChild(constr);
+    }
+
+    /**
+     * Hands the catalog's clause to the two constraint kinds whose whole
+     * definition is written by the deferred finalizer, and to no other.
+     * <p>
+     * The kinds left out are left out because their definition is structural
+     * rather than an expression - a column list, a referenced table, a
+     * modifier - so this grammar has far less to trip over there, and what it
+     * does write when it trips is loud: measured on a definition broken by the
+     * same {@code IS NORMALIZED} hole, {@code PgConstraintPk} writes
+     * {@code PRIMARY KEY } with no column list, which the server rejects, and
+     * {@code PgConstraintFk.getDefinition()} throws on the unset foreign schema
+     * before anything is written at all.
+     *
+     * @param constr     the constraint being read
+     * @param definition the clause to keep, or {@code null} to release it
+     */
+    private static void setCatalogDefinition(PgConstraint constr, String definition) {
+        if (constr instanceof PgConstraintCheck check) {
+            check.setCatalogDefinition(definition);
+        } else if (constr instanceof PgConstraintExclude exclude) {
+            exclude.setCatalogDefinition(definition);
+        }
     }
 
     private void readNotNullConstraint(ResultSet res, PgAbstractTable table,

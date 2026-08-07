@@ -33,8 +33,15 @@ import org.pgcodekeeper.core.database.pg.loader.PgJdbcLoader;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.VexContext;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgFuncProcAnalysisLauncher;
+import org.pgcodekeeper.core.database.pg.parser.launcher.PgFuncProcAnalysisLauncher.BodyType;
+import org.pgcodekeeper.core.database.pg.parser.launcher.PgFuncProcAnalysisLauncher.ParseDiagnosticPolicy;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgVexAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateAggregate;
+import org.pgcodekeeper.core.database.pg.routine.PgJdbcRoutineBodyCatalogMode;
+import org.pgcodekeeper.core.database.pg.routine.PgRoutineBodyCanonicalizer;
+import org.pgcodekeeper.core.database.pg.routine.RoutineBodyRepresentation;
+import org.pgcodekeeper.core.database.pg.routine.RoutineBodySource;
+import org.pgcodekeeper.core.database.pg.routine.RoutineFingerprint;
 import org.pgcodekeeper.core.database.pg.schema.PgAbstractFunction;
 import org.pgcodekeeper.core.database.pg.schema.PgAggregate;
 import org.pgcodekeeper.core.database.pg.schema.PgAggregate.AggFuncs;
@@ -46,15 +53,28 @@ import org.pgcodekeeper.core.database.pg.utils.PgConsts;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts.FUNC_SIGN;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
 import org.pgcodekeeper.core.localizations.Messages;
-import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
 import org.pgcodekeeper.core.utils.Utils;
 
 /**
  * Reader for PostgreSQL functions, procedures and aggregates.
  * Loads function, procedure and aggregate definitions from pg_proc system catalog.
+ * On PostgreSQL the query excludes aggregates, which are loaded by the
+ * dedicated {@link PgAggregatesReader}; Greenplum uses a combined query.
  */
-public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
+public class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
+
+    private static final String BODY_EXCHANGE_ELIGIBLE = """
+            res.prokind <> 'a'
+                AND l.lanname IN ('sql', 'plpgsql')
+                AND (res.probin IS NULL OR res.probin = '')
+                AND res.prosrc IS NOT NULL
+                AND res.prosrc <> ''
+                AND res.prosrc <> '-'""";
+
+    protected final boolean includePrivileges;
+    private final PgJdbcRoutineBodyCatalogMode bodyCatalogMode;
+    private long bodyMetadataOrdinal;
 
     /**
      * Creates a new functions reader.
@@ -62,22 +82,66 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
      * @param loader the JDBC loader base for database operations
      */
     public PgFunctionsReader(PgJdbcLoader loader) {
+        this(loader, PgJdbcRoutineBodyCatalogMode.FULL_BODY);
+    }
+
+    /**
+     * Creates a reader with one immutable per-load body projection selected by
+     * the loader capability handshake.
+     *
+     * @param loader loader that owns the current catalog snapshot
+     * @param bodyCatalogMode routine body catalog projection
+     */
+    public PgFunctionsReader(PgJdbcLoader loader,
+                             PgJdbcRoutineBodyCatalogMode bodyCatalogMode) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
+        this.bodyCatalogMode = bodyCatalogMode;
     }
 
     @Override
     protected void processResult(ResultSet res, ISchema schema) throws SQLException {
+        long metadataOrdinal = ++bodyMetadataOrdinal;
+        PgRoutineBodyCatalogRow bodyCatalogRow = bodyCatalogMode.isFingerprint()
+                ? PgRoutineBodyCatalogRow.readFingerprint(res)
+                : null;
+        boolean isAggregate = res.getBoolean("proisagg");
+        if (isAggregate && bodyCatalogRow != null && bodyCatalogRow.fingerprint() != null) {
+            throw new SQLException(
+                    "Aggregate PostgreSQL routine contains fingerprint metadata");
+        }
         String schemaName = schema.getName();
         String funcName = res.getString("proname");
-        PgAbstractFunction f = res.getBoolean("proisagg") ? getAgg(res, schemaName, funcName)
-                : getFunc(res, schema, funcName);
+        PgAbstractFunction f;
+        List<Pair<String, ObjectReference>> argsQualTypes = null;
+        RoutineBodyPlan bodyPlan = null;
+        String defaultValues = null;
+        String[] configurations = null;
+        if (isAggregate) {
+            f = getAgg(res, schemaName, funcName);
+        } else {
+            f = getFunc(res, schema, funcName);
+            argsQualTypes = fillArguments(f, res);
+            bodyPlan = prepareBody(f, res, bodyCatalogRow, metadataOrdinal);
+            defaultValues = res.getString("default_values_as_string");
+            configurations = PgJdbcUtils.getColArray(res, "proconfig", true);
+            validateConfigurations(configurations);
+        }
 
-        loader.setOwner(f, res.getLong("proowner"));
+        if (includePrivileges) {
+            loader.setOwner(f, res.getLong("proowner"));
+            loader.setPrivileges(f, res.getString("aclarray"), schemaName);
+        }
         loader.setComment(f, res);
-        loader.setPrivileges(f, res.getString("aclarray"), schemaName);
         loader.setAuthor(f, res);
 
         schema.addChild(f);
+        if (!isAggregate) {
+            IDatabase db = schema.getDatabase();
+            publishBody(f, db, argsQualTypes, bodyPlan);
+            fillDefaultValues(f, db, defaultValues);
+            fillConfiguration(f, configurations);
+        }
     }
 
     private PgAbstractFunction getFunc(ResultSet res, ISchema schema, String funcName) throws SQLException {
@@ -152,11 +216,6 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
             function.setRows(rows);
         }
 
-        IDatabase db = schema.getDatabase();
-        fillBody(function, db, res);
-        fillDefaultValues(function, db, res);
-        fillConfiguration(function, res);
-
         return function;
     }
 
@@ -171,9 +230,8 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
         }
     }
 
-    private void fillDefaultValues(PgAbstractFunction function, IDatabase db, ResultSet res)
-            throws SQLException {
-        String defaultValuesAsString = res.getString("default_values_as_string");
+    private void fillDefaultValues(PgAbstractFunction function, IDatabase db,
+                                   String defaultValuesAsString) {
         if (defaultValuesAsString == null) {
             return;
         }
@@ -198,8 +256,7 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
                 });
     }
 
-    private void fillConfiguration(PgAbstractFunction function, ResultSet res) throws SQLException {
-        String[] proconfig = PgJdbcUtils.getColArray(res, "proconfig", true);
+    private void fillConfiguration(PgAbstractFunction function, String[] proconfig) {
         if (proconfig == null) {
             return;
         }
@@ -212,7 +269,27 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
             switch (par) {
                 case "temp_tablespaces", "session_preload_libraries", "shared_preload_libraries",
                 "local_preload_libraries", "search_path":
-                    function.addConfiguration(par, null);
+                    // the catalog's own value is stored here and unconditionally,
+                    // before the task is submitted: the finalizer below runs only
+                    // when this task's parse reported no errors
+                    // (AbstractJdbcLoader:377), while the entry reaches the model
+                    // either way and appendFunctionFullSQL spells out
+                    // "SET <par> TO " + the value with no null check. Without it a
+                    // value this grammar cannot read was written out as
+                    // SET search_path TO null - a statement the server accepts,
+                    // and one that points the setting at a schema called null.
+                    //
+                    // Unlike the rule and the CHECK constraint there is a raw half
+                    // to fill here: proconfig carries name=value and the value is
+                    // the whole of what the parse splits. It is quoted the way the
+                    // default branch below quotes every other GUC, as one string
+                    // literal: these five are exactly PostgreSQL's GUC_LIST_QUOTE
+                    // set, so the server applies its own list splitting to that
+                    // string and the entry means what the catalog says. Handing
+                    // the value over unquoted instead would emit nothing at all
+                    // after TO for an empty one. The finalizer overwrites it with
+                    // the parsed elements, so the readable path is unchanged
+                    function.addConfiguration(par, Utils.quoteString(val));
                     loader.submitAntlrTask(val, SQLParser::vex_eof,
                             ctx -> {
                                 StringBuilder sb = new StringBuilder();
@@ -232,12 +309,35 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
         }
     }
 
-    private void fillBody(PgAbstractFunction function, IDatabase db, ResultSet res) throws SQLException {
-        List<Pair<String, ObjectReference>> argsQualTypes = fillArguments(function, res);
+    private void validateConfigurations(String[] proconfig) {
+        if (proconfig == null) {
+            return;
+        }
+        for (String param : proconfig) {
+            if (param.indexOf('=') < 0) {
+                throw new IllegalArgumentException("Malformed PostgreSQL routine configuration");
+            }
+        }
+    }
+
+    private RoutineBodyPlan prepareBody(PgAbstractFunction function, ResultSet res,
+                                        PgRoutineBodyCatalogRow catalogRow,
+                                        long metadataOrdinal) throws SQLException {
+        if (catalogRow != null && catalogRow.fingerprint() != null) {
+            BodyType bodyType = getPlainTextBodyType(function);
+            if (bodyType == null) {
+                throw new SQLException("Fingerprint PostgreSQL routine has unsupported language: "
+                        + function.getLanguage());
+            }
+            return RoutineBodyPlan.fingerprint(
+                    bodyType, catalogRow.bodyOid(), metadataOrdinal, catalogRow.fingerprint());
+        }
 
         String body = "";
-        String definition = res.getString("prosrc");
-        String probin = res.getString("probin");
+        String definition = catalogRow == null
+                ? res.getString("prosrc") : catalogRow.fullBodyProsrc();
+        String probin = catalogRow == null
+                ? res.getString("probin") : catalogRow.probin();
         if (probin != null && !probin.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             sb.append(Utils.quoteString(probin));
@@ -253,29 +353,120 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
         } else if (definition != null && !definition.isEmpty() && !"-".equals(definition)) {
             body = PgDiffUtils.quoteStringDollar(definition);
         } else if (PgSupportedVersion.VERSION_14.isLE(loader.getVersion())) {
-            String probody = res.getString("prosqlbody");
+            String probody = catalogRow == null
+                    ? res.getString("prosqlbody") : catalogRow.prosqlbody();
             // must not be null at this point, otherwise function has no body (?)
             IPgJdbcReader.checkObjectValidity(probody, DbObjType.FUNCTION, function.getBareName());
             function.setInStatementBody(true);
             body = probody;
         }
 
-        ISettings settings = loader.getSettings();
-        function.setBody(getTextWithCheckNewLines(body));
+        String canonicalBody = PgRoutineBodyCanonicalizer.canonicalizeQuoted(
+                body, loader.getSettings().isKeepNewlines());
 
-        // Parsing the function definition and adding its result context for analysis.
+        BodyType bodyType;
+        String parseInput;
         if (function.isInStatementBody()) {
-            loader.submitAntlrTask(body, SQLParser::function_body, ctx -> db.addAnalysisLauncher(
-                    new PgFuncProcAnalysisLauncher(function, ctx, loader.getCurrentLocation(), argsQualTypes,
-                            settings.isEnableFunctionBodiesDependencies())));
+            bodyType = BodyType.FUNCTION_BODY;
+            parseInput = body;
         } else if (!"-".equals(definition) && "SQL".equalsIgnoreCase(function.getLanguage())) {
-            loader.submitAntlrTask(definition, SQLParser::sql, ctx -> db.addAnalysisLauncher(
-                    new PgFuncProcAnalysisLauncher(function, ctx, loader.getCurrentLocation(), argsQualTypes,
-                            settings.isEnableFunctionBodiesDependencies())));
+            bodyType = BodyType.SQL;
+            parseInput = definition;
         } else if (!"-".equals(definition) && "PLPGSQL".equalsIgnoreCase(function.getLanguage())) {
-            loader.submitPlpgsqlTask(definition, SQLParser::plpgsql_function, ctx -> db.addAnalysisLauncher(
-                    new PgFuncProcAnalysisLauncher(function, ctx, loader.getCurrentLocation(), argsQualTypes,
-                            settings.isEnableFunctionBodiesDependencies())));
+            bodyType = BodyType.PLPGSQL;
+            parseInput = definition;
+        } else {
+            return RoutineBodyPlan.fullBody(canonicalBody, null, null, false);
+        }
+
+        boolean plainTextBody = (probin == null || probin.isEmpty())
+                && definition != null && !definition.isEmpty() && !"-".equals(definition)
+                && (bodyType == BodyType.SQL || bodyType == BodyType.PLPGSQL);
+        return RoutineBodyPlan.fullBody(
+                canonicalBody, parseInput, bodyType, plainTextBody);
+    }
+
+    private static BodyType getPlainTextBodyType(PgAbstractFunction function) {
+        if ("SQL".equalsIgnoreCase(function.getLanguage())) {
+            return BodyType.SQL;
+        }
+        if ("PLPGSQL".equalsIgnoreCase(function.getLanguage())) {
+            return BodyType.PLPGSQL;
+        }
+        return null;
+    }
+
+    private void publishBody(PgAbstractFunction function, IDatabase db,
+                             List<Pair<String, ObjectReference>> argsQualTypes,
+                             RoutineBodyPlan bodyPlan) {
+        BodyType bodyType = bodyPlan.bodyType();
+        if (bodyType == null) {
+            function.setBody(bodyPlan.canonicalBody());
+            return;
+        }
+
+        String location = loader.getCurrentLocation();
+        PgFuncProcAnalysisLauncher launcher;
+        if (bodyPlan.plainTextBody()) {
+            RoutineBodyRepresentation representation = bodyType == BodyType.SQL
+                    ? RoutineBodyRepresentation.SQL_TEXT
+                    : RoutineBodyRepresentation.PLPGSQL_TEXT;
+            RoutineBodySource source = bodyPlan.fingerprint() == null
+                    ? loader.registerFullBodyRoutineBody(
+                            function, bodyPlan.parseInput(), bodyPlan.canonicalBody(), representation)
+                    : loader.registerFingerprintRoutineBody(
+                            function, bodyPlan.bodyOid(), bodyPlan.metadataOrdinal(),
+                            bodyPlan.fingerprint(), representation);
+            boolean transferred = false;
+            try {
+                launcher = new PgFuncProcAnalysisLauncher(
+                        function, source, bodyType, location, location, argsQualTypes,
+                        loader.getSettings().isEnableFunctionBodiesDependencies(),
+                        ParseDiagnosticPolicy.REPORT);
+                transferred = true;
+            } finally {
+                if (!transferred) {
+                    source.close();
+                }
+            }
+            if (bodyPlan.fingerprint() != null
+                    && PgFuncProcAnalysisLauncher.isSkipMatchedBodyAnalysisEligible(
+                            loader.getSettings(), bodyType)) {
+                launcher.enableSkipMatchedBodyAnalysis();
+                if (loader.isComparisonOldSide()) {
+                    // the server already accepted this body and the OLD side
+                    // never emits it into the script, so the analysis skip
+                    // applies regardless of the hash-first match verdict
+                    launcher.enableSkipOldSideBodyAnalysis();
+                }
+            }
+        } else {
+            function.setBody(bodyPlan.canonicalBody());
+            launcher = new PgFuncProcAnalysisLauncher(
+                    function, bodyPlan.parseInput(), bodyType, location, location, argsQualTypes,
+                    loader.getSettings().isEnableFunctionBodiesDependencies(),
+                    ParseDiagnosticPolicy.REPORT);
+        }
+        loader.submitAnalysisLauncher(launcher, db);
+    }
+
+    private record RoutineBodyPlan(String canonicalBody, String parseInput,
+                                   BodyType bodyType, boolean plainTextBody,
+                                   long bodyOid, long metadataOrdinal,
+                                   RoutineFingerprint fingerprint) {
+
+        private static RoutineBodyPlan fullBody(
+                String canonicalBody, String parseInput,
+                BodyType bodyType, boolean plainTextBody) {
+            return new RoutineBodyPlan(
+                    canonicalBody, parseInput, bodyType, plainTextBody, 0L, 0L, null);
+        }
+
+        private static RoutineBodyPlan fingerprint(
+                BodyType bodyType, long bodyOid, long metadataOrdinal,
+                RoutineFingerprint fingerprint) {
+            return new RoutineBodyPlan(
+                    null, null, bodyType, true, bodyOid, metadataOrdinal, fingerprint);
         }
     }
 
@@ -520,6 +711,9 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
 
     @Override
     public QueryBuilder getExtensionCte() {
+        // 'i' rows reference arbitrary catalogs, so the pg_extension
+        // reference-side shortcut of the default CTE does not apply here;
+        // both deptypes are covered by one classid = pg_proc prefix scan
         return EXTENSION_DEPS_CTE_BUILDER.copy()
                 .where("deptype IN ('e', 'i')");
     }
@@ -529,22 +723,28 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
         addExtensionDepsCte(builder);
         addDescriptionPart(builder);
 
+        // common part (functions/procedures/aggregates)
+        builder.column("res.proname");
+        if (includePrivileges) {
+            builder.column("res.proowner::bigint");
+        }
         builder
-                // common part (functions/procedures/aggregates)
-                .column("res.proname")
-                .column("res.proowner::bigint")
                 .column("res.prorettype::bigint")
                 .column("res.proallargtypes::bigint[]")
                 .column("res.proargmodes")
-                .column("res.proargnames")
-                .column("res.proacl::text AS aclarray")
+                .column("res.proargnames");
+        if (includePrivileges) {
+            builder.column("res.proacl::text AS aclarray");
+        }
+        builder
                 .column("res.proretset")
                 .column("array(select pg_catalog.unnest(res.proargtypes))::bigint[] as argtypes")
                 .from("pg_catalog.pg_proc res")
 
                 // for functions/procedures
-                .column("l.lanname AS lang_name")
-                .column("res.prosrc")
+                .column("l.lanname AS lang_name");
+        addProsrcProjections(builder);
+        builder
                 .column("res.provolatile")
                 .column("res.proleakproof")
                 .column("res.proisstrict")
@@ -552,12 +752,57 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
                 .column("res.procost::real")
                 .column("res.prorows::real")
                 .column("res.proconfig")
-                .column("res.probin")
+                .column(getProbinProjection())
                 .column("pg_catalog.pg_get_expr(res.proargdefaults, 0) AS default_values_as_string")
                 .column("res.pronargs")
-                .join("LEFT JOIN pg_catalog.pg_language l ON l.oid = res.prolang")
+                .join("LEFT JOIN pg_catalog.pg_language l ON l.oid = res.prolang");
 
-                // for aggregates
+        if (loader.isGreenplumDb()) {
+            // Greenplum uses the combined routine/aggregate query
+            addAggregatePart(builder, "LEFT JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = res.oid");
+        }
+
+        if (PgSupportedVersion.GP_VERSION_7.isLE(loader.getVersion())) {
+            builder
+                    .column("res.protrftypes::bigint[]")
+                    .column("res.proparallel")
+                    .column("res.prosupport AS support_func")
+                    .column("res.prokind = 'a' AS proisagg")
+                    .column("res.prokind = 'w' AS proiswindow")
+                    .column("res.prokind = 'p' AS proisproc");
+            if (loader.isGreenplumDb()) {
+                builder
+                        .column("a.aggfinalmodify AS finalfunc_modify")
+                        .column("a.aggmfinalmodify AS mfinalfunc_modify");
+            }
+        } else {
+            builder
+                    .column("res.proisagg")
+                    .column("res.proiswindow");
+        }
+
+        if (PgSupportedVersion.VERSION_14.isLE(loader.getVersion())) {
+            builder.column(getProsqlbodyProjection());
+        }
+
+        if (loader.isGreenplumDb()) {
+            builder.column("res.proexeclocation AS executeOn");
+        } else {
+            // aggregates are loaded by PgAggregatesReader on PostgreSQL
+            builder.where("res.prokind <> 'a'");
+        }
+
+        builder.orderBy("res.oid");
+    }
+
+    /**
+     * Adds aggregate-only projections and their lookup joins.
+     *
+     * @param builder query builder to fill
+     * @param aggregateJoin join clause attaching pg_aggregate as alias {@code a}
+     */
+    protected final void addAggregatePart(QueryBuilder builder, String aggregateJoin) {
+        builder
                 .column("sfunc.proname AS sfunc")
                 .column("sfunc_n.nspname AS sfunc_nsp")
                 .column("a.aggtranstype AS stype")
@@ -586,7 +831,7 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
                 .column("serialfn_n.nspname AS serialfunc_nsp")
                 .column("deserialfn.proname AS deserialfunc")
                 .column("deserialfn_n.nspname AS deserialfunc_nsp")
-                .join("LEFT JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = res.oid")
+                .join(aggregateJoin)
                 .join("LEFT JOIN pg_catalog.pg_proc sfunc ON a.aggtransfn = sfunc.oid")
                 .join("LEFT JOIN pg_catalog.pg_namespace sfunc_n ON sfunc.pronamespace = sfunc_n.oid")
                 .join("LEFT JOIN pg_catalog.pg_proc finalfn ON a.aggfinalfn = finalfn.oid")
@@ -605,31 +850,60 @@ public final class PgFunctionsReader extends PgAbstractSearchPathJdbcReader {
                 .join("LEFT JOIN pg_catalog.pg_namespace serialfn_n ON serialfn.pronamespace = serialfn_n.oid")
                 .join("LEFT JOIN pg_catalog.pg_proc deserialfn ON a.aggdeserialfn = deserialfn.oid")
                 .join("LEFT JOIN pg_catalog.pg_namespace deserialfn_n ON deserialfn.pronamespace = deserialfn_n.oid");
+    }
 
-        if (PgSupportedVersion.GP_VERSION_7.isLE(loader.getVersion())) {
-            builder
-                    .column("res.protrftypes::bigint[]")
-                    .column("res.proparallel")
-                    .column("res.prosupport AS support_func")
-                    .column("res.prokind = 'a' AS proisagg")
-                    .column("res.prokind = 'w' AS proiswindow")
-                    .column("res.prokind = 'p' AS proisproc")
-                    .column("a.aggfinalmodify AS finalfunc_modify")
-                    .column("a.aggmfinalmodify AS mfinalfunc_modify");
-        } else {
-            builder
-                    .column("res.proisagg")
-                    .column("res.proiswindow");
+    private void addProsrcProjections(QueryBuilder builder) {
+        if (!bodyCatalogMode.isFingerprint()) {
+            builder.column("res.prosrc");
+            return;
         }
 
-        if (PgSupportedVersion.VERSION_14.isLE(loader.getVersion())) {
-            builder.column("""
+        // The fingerprint measures the profile-normalized body: with
+        // keep-newlines disabled the canonicalizer strips carriage returns,
+        // so the exchange hash must be blind to them too. The residual
+        // transfer still ships the exact prosrc; only the hash is normalized.
+        String fingerprintInput = loader.getSettings().isKeepNewlines()
+                ? "res.prosrc"
+                : "pg_catalog.replace(res.prosrc, E'\\r', '')";
+        String lengthExpression = bodyCatalogMode.usesDirectUtf8Length()
+                ? "pg_catalog.octet_length(" + fingerprintInput + ")::bigint"
+                : "pg_catalog.octet_length("
+                        + "pg_catalog.convert_to(" + fingerprintInput + ", 'UTF8'))::bigint";
+        builder
+                .column("CASE WHEN " + BODY_EXCHANGE_ELIGIBLE
+                        + " THEN NULL::text ELSE res.prosrc END AS full_body_prosrc")
+                .column("CASE WHEN " + BODY_EXCHANGE_ELIGIBLE
+                        + " THEN res.oid::bigint ELSE NULL::bigint END AS body_oid")
+                .column("CASE WHEN " + BODY_EXCHANGE_ELIGIBLE + "\n"
+                        + "  THEN " + lengthExpression + "\n"
+                        + "  ELSE NULL::bigint\n"
+                        + "END AS body_utf8_length")
+                .column("CASE WHEN " + BODY_EXCHANGE_ELIGIBLE + "\n"
+                        + "  THEN pg_catalog.sha256("
+                                + "pg_catalog.convert_to(" + fingerprintInput + ", 'UTF8'))\n"
+                        + "  ELSE NULL::bytea\n"
+                        + "END AS body_sha256");
+    }
+
+    private String getProbinProjection() {
+        if (!bodyCatalogMode.isFingerprint()) {
+            return "res.probin";
+        }
+        return "CASE WHEN " + BODY_EXCHANGE_ELIGIBLE
+                + " THEN NULL::text ELSE res.probin END AS probin";
+    }
+
+    private String getProsqlbodyProjection() {
+        if (!bodyCatalogMode.isFingerprint()) {
+            return """
                     case when (res.prosrc is null or res.prosrc='') and l.lanname = 'sql'
-                        then pg_get_function_sqlbody(res.oid) end as prosqlbody""");
+                        then pg_get_function_sqlbody(res.oid) end as prosqlbody""";
         }
-
-        if (loader.isGreenplumDb()) {
-            builder.column("res.proexeclocation AS executeOn");
-        }
+        return "CASE\n"
+                + "  WHEN " + BODY_EXCHANGE_ELIGIBLE + " THEN NULL::text\n"
+                + "  WHEN (res.prosrc IS NULL OR res.prosrc = '') AND l.lanname = 'sql'\n"
+                + "    THEN pg_catalog.pg_get_function_sqlbody(res.oid)\n"
+                + "  ELSE NULL::text\n"
+                + "END AS prosqlbody";
     }
 }

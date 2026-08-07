@@ -22,13 +22,17 @@ import org.antlr.v4.runtime.Token;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.parser.*;
 import org.pgcodekeeper.core.database.base.schema.Argument;
-import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.generated.SQLParser.*;
 import org.pgcodekeeper.core.database.pg.parser.launcher.*;
+import org.pgcodekeeper.core.database.pg.routine.OwnedRoutineBodySource;
+import org.pgcodekeeper.core.database.pg.routine.RoutineBodyProfile;
+import org.pgcodekeeper.core.database.pg.routine.RoutineBodyRepresentation;
+import org.pgcodekeeper.core.database.pg.routine.RoutineIdentity;
 import org.pgcodekeeper.core.database.pg.schema.*;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts.FUNC_SIGN;
+import org.pgcodekeeper.core.exception.ObjectCreationException;
 import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.*;
 
@@ -46,7 +50,6 @@ public final class PgCreateFunction extends PgParserAbstract {
      */
     public static final String DEFAULT = "DEFAULT";
 
-    private final List<Object> errors;
     private final Queue<AntlrTask<?>> antlrTasks;
     private final Create_function_statementContext ctx;
 
@@ -63,7 +66,6 @@ public final class PgCreateFunction extends PgParserAbstract {
                           List<Object> errors, Queue<AntlrTask<?>> antlrTasks, ISettings settings) {
         super(db, settings);
         this.ctx = ctx;
-        this.errors = errors;
         this.antlrTasks = antlrTasks;
     }
 
@@ -91,11 +93,20 @@ public final class PgCreateFunction extends PgParserAbstract {
             function.setReturns(getTypeName(ctx.rettype_data));
             addTypeDepcy(ctx.rettype_data, function);
         }
-        addSafe(getSchemaSafe(ids), function, ids, parseArguments(ctx.function_parameters().function_args()));
+        PgSchema schema = (PgSchema) getSchemaSafe(ids);
+        try {
+            addSafe(schema, function, ids,
+                    parseArguments(ctx.function_parameters().function_args()));
+        } catch (ObjectCreationException ex) {
+            db.recordProjectRoutineBodyDuplicate(new RoutineIdentity(schema.getName(),
+                    function.getStatementType(), function.getName()));
+            throw ex;
+        }
     }
 
     private void fillFunction(PgAbstractFunction function) {
-        Function_defContext funcDef = null;
+        Pair<String, Token> textDefinition = null;
+        String canonicalDefinition = null;
         Float cost = null;
         String language = null;
         for (Function_actions_commonContext action : ctx.function_actions_common()) {
@@ -129,12 +140,13 @@ public final class PgCreateFunction extends PgParserAbstract {
                     function.setRows(Float.parseFloat(action.result_rows.getText()));
                 }
             } else if (action.AS() != null) {
-                funcDef = action.function_def();
-                StringBuilder sb = new StringBuilder();
+                Function_defContext funcDef = action.function_def();
                 if (funcDef.symbol != null) {
+                    textDefinition = null;
                     String probin = unquoteQuotedString(funcDef.definition).getFirst();
                     String symbol = unquoteQuotedString(funcDef.symbol).getFirst();
 
+                    StringBuilder sb = new StringBuilder();
                     sb.append(Utils.quoteString(probin)).append(", ");
 
                     if (!symbol.contains("'") && !symbol.contains("\\")) {
@@ -142,12 +154,16 @@ public final class PgCreateFunction extends PgParserAbstract {
                     } else {
                         sb.append(PgDiffUtils.quoteStringDollar(symbol));
                     }
+                    canonicalDefinition = checkNewLines(sb.toString());
                 } else {
-                    String definition = unquoteQuotedString(funcDef.definition).getFirst();
-                    sb.append(PgDiffUtils.quoteStringDollar(definition));
+                    textDefinition = unquoteQuotedString(funcDef.definition);
+                    // quoteStringDollar already returns the complete canonical
+                    // body; avoid copying it through another full-size builder.
+                    canonicalDefinition = checkNewLines(
+                            PgDiffUtils.quoteStringDollar(textDefinition.getFirst()));
                 }
 
-                function.setBody(checkNewLines(sb.toString()));
+                function.setBody(canonicalDefinition);
             } else if (action.TRANSFORM() != null) {
                 for (Transform_for_typeContext transform : action.transform_for_type()) {
                     function.addTransform(getFullCtxText(transform.data_type()));
@@ -170,13 +186,16 @@ public final class PgCreateFunction extends PgParserAbstract {
         Function_bodyContext body = ctx.function_body();
         if (body != null) {
             function.setInStatementBody(true);
-            function.setBody(getFullCtxTextWithCheckNewLines(body));
+            String definition = getFullCtxText(body);
+            String canonical = checkNewLines(definition);
+            function.setBody(canonical);
             if (language == null) {
                 language = "sql";
             }
-            analyzeFunctionBody(function, body, funcArgs);
-        } else if (funcDef != null && funcDef.symbol == null && PgDiffUtils.isValidLanguage(language)) {
-            analyzeFunctionDefinition(function, language, funcDef.definition, funcArgs);
+            analyzeFunctionBody(function, definition, canonical, body.getStart(), funcArgs);
+        } else if (textDefinition != null && PgDiffUtils.isValidLanguage(language)) {
+            analyzeFunctionDefinition(function, language, textDefinition,
+                    canonicalDefinition, funcArgs);
         }
 
         With_storage_parameterContext storage = ctx.with_storage_parameter();
@@ -263,59 +282,61 @@ public final class PgCreateFunction extends PgParserAbstract {
     }
 
     private void analyzeFunctionDefinition(PgAbstractFunction function, String language,
-                                           SconstContext definition, List<Pair<String, ObjectReference>> funcArgs) {
-        Pair<String, Token> pair = unquoteQuotedString(definition);
-        String def = pair.getFirst();
-        Token start = pair.getSecond();
+                                           Pair<String, Token> definition,
+                                           String canonicalDefinition,
+                                           List<Pair<String, ObjectReference>> funcArgs) {
+        String raw = definition.getFirst();
+        Token start = definition.getSecond();
 
         // Parsing the function definition and adding its result context for analysis.
         // Adding contexts of function arguments for analysis.
 
-        String name = "function definition of " + function.getBareName();
-        List<Object> err = new ArrayList<>();
-
+        PgFuncProcAnalysisLauncher.BodyType bodyType;
+        RoutineBodyRepresentation representation;
         if ("SQL".equalsIgnoreCase(language)) {
-            AntlrTaskManager.submit(antlrTasks,
-                    () -> PgParserUtils.createSqlParser(def, name, err, start).sql(),
-                    funcCtx -> {
-                        if (!err.isEmpty()) {
-                            errors.addAll(err);
-                            return;
-                        }
-                        PgFuncProcAnalysisLauncher launcher = new PgFuncProcAnalysisLauncher(
-                                function, funcCtx, fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
-                        launcher.setOffset(start);
-                        db.addAnalysisLauncher(launcher);
-                    });
+            bodyType = PgFuncProcAnalysisLauncher.BodyType.SQL;
+            representation = RoutineBodyRepresentation.SQL_TEXT;
         } else if ("PLPGSQL".equalsIgnoreCase(language)) {
-            AntlrTaskManager.submit(antlrTasks,
-                    () -> {
-                        var parser = PgParserUtils.createSqlParser(def, name, err, start);
-                        PgParserUtils.removeIntoStatements(parser);
-                        return parser.plpgsql_function();
-                    },
-                    funcCtx -> {
-                        if (!err.isEmpty()) {
-                            errors.addAll(err);
-                            return;
-                        }
-                        PgFuncProcAnalysisLauncher launcher = new PgFuncProcAnalysisLauncher(
-                                function, funcCtx, fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
-                        launcher.setOffset(start);
-                        db.addAnalysisLauncher(launcher);
-                    });
+            bodyType = PgFuncProcAnalysisLauncher.BodyType.PLPGSQL;
+            representation = RoutineBodyRepresentation.PLPGSQL_TEXT;
+        } else {
+            return;
         }
+
+        var source = OwnedRoutineBodySource.exchangeCandidate(raw,
+                Objects.requireNonNull(canonicalDefinition, "canonicalDefinition"),
+                RoutineBodyProfile.current(settings.isKeepNewlines()), representation);
+        // The deferred body reparse reports its syntax errors under this name, and
+        // that name becomes the file path of every AntlrError it produces. It must
+        // therefore address the source the body was read from - the same file the
+        // enclosing CREATE statement reports - or consumers that resolve the path
+        // back to a file (the editor's error markers) silently drop the error.
+        var launcher = new PgFuncProcAnalysisLauncher(function, source, bodyType, fileName,
+                fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
+        if (PgFuncProcAnalysisLauncher.isSkipMatchedBodyAnalysisEligible(settings, bodyType)) {
+            launcher.enableSkipMatchedBodyAnalysis();
+        }
+        launcher.setOffset(start);
+        deferFunctionAnalysis(launcher);
     }
 
-    private void analyzeFunctionBody(PgAbstractFunction function, Function_bodyContext body,
+    private void analyzeFunctionBody(PgAbstractFunction function, String definition,
+                                     String canonicalDefinition, Token start,
                                      List<Pair<String, ObjectReference>> funcArgs) {
-        // finalizer-only task, defers analyzer until finalizing stage
-        AntlrTaskManager.submit(antlrTasks, () -> body,
-                funcCtx -> {
-                    PgFuncProcAnalysisLauncher launcher = new PgFuncProcAnalysisLauncher(
-                            function, funcCtx, fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
-                    db.addAnalysisLauncher(launcher);
-                });
+        var source = OwnedRoutineBodySource.analysisOnly(definition, canonicalDefinition);
+        // This reparse suppresses its diagnostics, but it is named after the same
+        // source file anyway: a name that does not address the source is what made
+        // quoted-body errors unmarkable, and nothing here is worth repeating it.
+        var launcher = new PgFuncProcAnalysisLauncher(function, source,
+                PgFuncProcAnalysisLauncher.BodyType.FUNCTION_BODY, fileName,
+                fileName, funcArgs, settings.isEnableFunctionBodiesDependencies());
+        launcher.setOffset(start);
+        deferFunctionAnalysis(launcher);
+    }
+
+    private void deferFunctionAnalysis(PgFuncProcAnalysisLauncher launcher) {
+        PgDatabase targetDatabase = db;
+        AntlrTaskManager.submit(antlrTasks, () -> launcher, targetDatabase::addAnalysisLauncher);
     }
 
     /**

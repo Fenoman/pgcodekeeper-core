@@ -32,6 +32,36 @@ public class ParserUtils {
     public static final String PARSED_OBJ_NAME = "fake string to clean parser cache";
 
     /**
+     * Counts the bytes that Java's UTF-8 encoder would produce without
+     * allocating an intermediate byte array. Unpaired UTF-16 surrogates match
+     * the encoder's one-byte replacement behavior.
+     *
+     * @param value UTF-16 input to measure
+     * @return exact encoded UTF-8 length
+     */
+    public static long getUtf8Length(CharSequence value) {
+        long length = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c <= 0x7F) {
+                length++;
+            } else if (c <= 0x7FF) {
+                length += 2;
+            } else if (Character.isHighSurrogate(c)
+                    && i + 1 < value.length()
+                    && Character.isLowSurrogate(value.charAt(i + 1))) {
+                length += 4;
+                i++;
+            } else if (Character.isSurrogate(c)) {
+                length++;
+            } else {
+                length += 3;
+            }
+        }
+        return length;
+    }
+
+    /**
      * Creates a parser for ignore list files.
      *
      * @param listFile path to the ignore list file
@@ -39,11 +69,23 @@ public class ParserUtils {
      * @throws IOException if there's an error reading the file
      */
     public static IgnoreListParser createIgnoreListParser(Path listFile) throws IOException {
+        return createIgnoreListParser(listFile, null);
+    }
+
+    /**
+     * Creates a parser for ignore list files that collects syntax errors.
+     *
+     * @param listFile path to the ignore list file
+     * @param errors   list to collect {@link AntlrError}s into, may be null
+     * @return configured IgnoreListParser instance
+     * @throws IOException if there's an error reading the file
+     */
+    public static IgnoreListParser createIgnoreListParser(Path listFile, List<Object> errors) throws IOException {
         String parsedObjectName = listFile.toString();
         var stream = CharStreams.fromPath(listFile);
         Lexer lexer = new IgnoreListLexer(stream);
         IgnoreListParser parser = new IgnoreListParser(new CommonTokenStream(lexer));
-        addErrorListener(lexer, parser, parsedObjectName, null, 0, 0, 0);
+        addErrorListener(lexer, parser, parsedObjectName, errors, 0, 0, 0);
         return parser;
     }
 
@@ -57,18 +99,26 @@ public class ParserUtils {
     }
 
     /**
-     * Creates a dependencies list parser from the given file.
+     * Creates a dependencies list parser from the given file that collects
+     * syntax errors.
+     * <p>
+     * The list is not optional the way it is for the ignore lists: a
+     * {@code null} here would leave {@code CustomAntlrErrorListener} with
+     * nothing to do but log, and ANTLR recovery would carry on to produce a
+     * dependency list silently missing whatever the broken line declared.
      *
      * @param depsFile the path to the dependencies list file
+     * @param errors   list to collect {@link AntlrError}s into
      * @return a configured parser instance
      * @throws IOException if the file cannot be read
      */
-    public static DependenciesListParser createDependenciesListParser(Path depsFile) throws IOException {
+    public static DependenciesListParser createDependenciesListParser(Path depsFile, List<Object> errors)
+            throws IOException {
         String parsedObjectName = depsFile.toString();
         var stream = CharStreams.fromPath(depsFile);
         Lexer lexer = new DependenciesListLexer(stream);
         DependenciesListParser parser = new DependenciesListParser(new CommonTokenStream(lexer));
-        addErrorListener(lexer, parser, parsedObjectName, null, 0, 0, 0);
+        addErrorListener(lexer, parser, parsedObjectName, errors, 0, 0, 0);
         return parser;
     }
 

@@ -61,6 +61,50 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
     private boolean isConstraint;
     private Boolean isImmediate;
     private String when;
+
+    /**
+     * The WHEN condition as the comparison sees it: the same tokens with
+     * canonical spacing, and the reserved words of the folded range
+     * {@code SQLLexer.ALL..WITH} raised to upper case. Only that range folds, so
+     * a word outside it - {@code IS}, for one - is still compared as written.
+     * <p>
+     * {@link #when} keeps the text the DDL is written from.
+     */
+    private String whenNormalized;
+
+    /**
+     * The server's own {@code pg_get_triggerdef()} statement, held only while
+     * the parse of that statement has not succeeded.
+     * <p>
+     * Both halves of {@link #when} are written in one place,
+     * {@code PgCreateTrigger.parseWhen}, which the JDBC reader reaches through
+     * the loader's deferred finalizer - and that finalizer runs only for a
+     * definition that parsed ({@code AbstractJdbcLoader:377}). The reader fetches
+     * and parses that definition for the {@code WHEN} clause and for nothing
+     * else, so a failed parse costs the trigger exactly the thing the parse was
+     * run for: {@link #getCreationSQL(SQLScript)} writes no {@code WHEN} at all,
+     * and a trigger without one fires on every row instead of the few its
+     * condition names.
+     * <p>
+     * There is no raw half to fill instead - the reader holds a whole
+     * {@code CREATE TRIGGER} statement, not the condition inside it - so the
+     * statement is kept and emitted verbatim. It is not a second spelling of the
+     * trigger: on the successful path the condition is a sub-span of this very
+     * statement and the rest is reconstructed from the same catalog row.
+     * <p>
+     * {@code pg_get_triggerdef()} carries neither the enabled state nor the
+     * comment, so both are appended after it exactly as they are after the
+     * generator's own statement - see {@link #appendEnabledStateAndComments}.
+     * <p>
+     * It joins {@link #computeHash(Hasher)} and {@link #compareUnalterable} for
+     * the reason {@link #whenNormalized} does: without it a trigger whose
+     * condition could not be read carries, in every field the comparison reads,
+     * exactly what an unconditional trigger carries - so it would compare equal
+     * to a project file that has no {@code WHEN}, and the difference would leave
+     * the diff tree and the script together.
+     */
+    private String catalogDefinition;
+
     /**
      * REFERENCING old table name
      */
@@ -81,6 +125,15 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
 
     @Override
     public void getCreationSQL(SQLScript script) {
+        if (catalogDefinition != null) {
+            // measured on PostgreSQL 17.10: pg_get_triggerdef() writes no
+            // terminating semicolon, so nothing is stripped before the script
+            // appends its own separator
+            script.addStatement(catalogDefinition);
+            appendEnabledStateAndComments(script);
+            return;
+        }
+
         final StringBuilder sbSQL = new StringBuilder();
         sbSQL.append("CREATE");
         if (isConstraint) {
@@ -174,7 +227,15 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         sbSQL.append("\n\tEXECUTE PROCEDURE ");
         sbSQL.append(function);
         script.addStatement(sbSQL);
+        appendEnabledStateAndComments(script);
+    }
 
+    /**
+     * The two parts a trigger carries outside its definition: neither the
+     * enabled state nor the comment is part of {@code pg_get_triggerdef()}, so
+     * both are appended the same way whichever branch above wrote the statement.
+     */
+    private void appendEnabledStateAndComments(SQLScript script) {
         if (triggerState != null) {
             addAlterTable(triggerState, this, script);
         }
@@ -271,8 +332,25 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         resetHash();
     }
 
-    public void setWhen(final String when) {
+    /**
+     * @param when           WHEN condition text as written, used for DDL output
+     * @param whenNormalized the same condition normalized for comparison
+     */
+    public void setWhen(final String when, final String whenNormalized) {
         this.when = when;
+        this.whenNormalized = whenNormalized;
+        resetHash();
+    }
+
+    /**
+     * Holds - or releases - the server's own statement for this trigger.
+     *
+     * @param catalogDefinition the {@code pg_get_triggerdef()} text to emit
+     *                          verbatim, or {@code null} once the model carries
+     *                          the parsed {@code WHEN} condition
+     */
+    public void setCatalogDefinition(final String catalogDefinition) {
+        this.catalogDefinition = catalogDefinition;
         resetHash();
     }
 
@@ -310,7 +388,7 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         hasher.put(isOnInsert);
         hasher.put(isOnTruncate);
         hasher.put(isOnUpdate);
-        hasher.put(when);
+        hasher.put(whenNormalized);
         hasher.put(updateColumns);
         hasher.put(isConstraint);
         hasher.put(isImmediate);
@@ -318,6 +396,7 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         hasher.put(newTable);
         hasher.put(oldTable);
         hasher.put(triggerState);
+        hasher.put(catalogDefinition);
     }
 
     @Override
@@ -338,13 +417,14 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
                 && (isOnInsert == trigger.isOnInsert)
                 && (isOnTruncate == trigger.isOnTruncate)
                 && (isOnUpdate == trigger.isOnUpdate)
-                && Objects.equals(when, trigger.when)
+                && Objects.equals(whenNormalized, trigger.whenNormalized)
                 && Objects.equals(updateColumns, trigger.updateColumns)
                 && (isConstraint == trigger.isConstraint)
                 && Objects.equals(isImmediate, trigger.isImmediate)
                 && Objects.equals(refTableName, trigger.refTableName)
                 && Objects.equals(newTable, trigger.newTable)
-                && Objects.equals(oldTable, trigger.oldTable);
+                && Objects.equals(oldTable, trigger.oldTable)
+                && Objects.equals(catalogDefinition, trigger.catalogDefinition);
     }
 
     @Override
@@ -357,7 +437,7 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         trigger.setOnInsert(isOnInsert);
         trigger.setOnTruncate(isOnTruncate);
         trigger.setOnUpdate(isOnUpdate);
-        trigger.setWhen(when);
+        trigger.setWhen(when, whenNormalized);
         trigger.updateColumns.addAll(updateColumns);
         trigger.setConstraint(isConstraint);
         trigger.setImmediate(isImmediate);
@@ -365,6 +445,7 @@ public class PgTrigger extends PgAbstractStatement implements ITrigger {
         trigger.setNewTable(newTable);
         trigger.setOldTable(oldTable);
         trigger.setTriggerState(triggerState);
+        trigger.setCatalogDefinition(catalogDefinition);
         return trigger;
     }
 }

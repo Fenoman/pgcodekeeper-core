@@ -18,6 +18,7 @@ package org.pgcodekeeper.core.database.pg.jdbc;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.jdbc.QueryBuilder;
 import org.pgcodekeeper.core.database.pg.loader.PgJdbcLoader;
@@ -25,6 +26,7 @@ import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateTrigger;
 import org.pgcodekeeper.core.database.pg.schema.*;
 import org.pgcodekeeper.core.database.pg.schema.PgTrigger.TgTypes;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
+import org.pgcodekeeper.core.utils.Pair;
 
 /**
  * Reader for PostgreSQL triggers.
@@ -161,11 +163,34 @@ public final class PgTriggersReader extends PgAbstractSearchPathJdbcReader {
             }
         }
 
-        String definition = res.getString("definition");
-        IPgJdbcReader.checkObjectValidity(definition, DbObjType.TRIGGER, triggerName);
-        loader.submitAntlrTask(definition, p -> p.sql().statement(0).schema_statement()
-                        .schema_create().create_trigger_statement().when_trigger(),
-                ctx -> PgCreateTrigger.parseWhen(ctx, t, schema.getDatabase(), loader.getCurrentLocation()));
+        // the full CREATE TRIGGER text is consumed only for the WHEN clause;
+        // 96%+ of triggers have none, so the definition is fetched and parsed
+        // only when pg_trigger.tgqual is present
+        if (res.getBoolean("has_when")) {
+            String definition = res.getString("definition");
+            // has_when comes from the same catalog row, so a null definition
+            // here can only mean a concurrently dropped trigger
+            IPgJdbcReader.checkObjectValidity(definition, DbObjType.TRIGGER, triggerName);
+            // the catalog's own statement is stored here and unconditionally,
+            // before the task is submitted: the finalizer below runs only when
+            // this task's parse reported no errors (AbstractJdbcLoader:377),
+            // while the trigger reaches its container either way. This branch is
+            // entered for the WHEN clause and for nothing else, so a failed
+            // parse costs the trigger exactly what the parse was run for - and a
+            // trigger written out without its WHEN fires on every row instead of
+            // the few the condition names. The finalizer drops the statement
+            // once the model carries the parsed condition
+            t.setCatalogDefinition(getTextWithCheckNewLines(definition));
+            loader.submitAntlrTask(definition,
+                    p -> new Pair<>(p.sql().statement(0).schema_statement()
+                            .schema_create().create_trigger_statement().when_trigger(),
+                            (CommonTokenStream) p.getTokenStream()),
+                    pair -> {
+                        PgCreateTrigger.parseWhen(pair.getFirst(), t, schema.getDatabase(),
+                                loader.getCurrentLocation(), pair.getSecond());
+                        t.setCatalogDefinition(null);
+                    });
+        }
 
         loader.setAuthor(t, res);
         loader.setComment(t, res);
@@ -217,7 +242,9 @@ public final class PgTriggersReader extends PgAbstractSearchPathJdbcReader {
                 .column("relcon.relname as refrelname")
                 .column("refnsp.nspname as refnspname")
                 .column("", subselect, "AS cols")
-                .column("pg_catalog.pg_get_triggerdef(res.oid,false) AS definition")
+                .column("res.tgqual IS NOT NULL AS has_when")
+                .column("CASE WHEN res.tgqual IS NOT NULL"
+                        + " THEN pg_catalog.pg_get_triggerdef(res.oid,false) END AS definition")
                 .from("pg_catalog.pg_trigger res")
                 .join("LEFT JOIN pg_catalog.pg_class cls ON cls.oid = res.tgrelid")
                 .join("LEFT JOIN pg_catalog.pg_class relcon ON relcon.oid = res.tgconstrrelid")

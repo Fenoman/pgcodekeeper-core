@@ -17,16 +17,19 @@ package org.pgcodekeeper.core.database.pg.jdbc;
 
 import java.sql.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.jdbc.QueryBuilder;
 import org.pgcodekeeper.core.database.base.schema.*;
 import org.pgcodekeeper.core.database.pg.loader.PgJdbcLoader;
+import org.pgcodekeeper.core.database.pg.parser.PgParserUtils;
 import org.pgcodekeeper.core.database.pg.parser.launcher.PgVexAnalysisLauncher;
 import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateDomain;
 import org.pgcodekeeper.core.database.pg.schema.*;
 import org.pgcodekeeper.core.database.pg.utils.PgDiffUtils;
 import org.pgcodekeeper.core.database.pg.utils.PgConsts.FUNC_SIGN;
 import org.pgcodekeeper.core.settings.ISettings;
+import org.pgcodekeeper.core.utils.Pair;
 import org.pgcodekeeper.core.utils.Utils;
 
 /**
@@ -37,6 +40,7 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
 
     private static final String EMPTY_FUNCTION = "-";
     private static final String ADD_CONSTRAINT = "ALTER DOMAIN noname ADD CONSTRAINT noname ";
+    private final boolean includePrivileges;
 
     /**
      * Constructs a new PgTypesReader.
@@ -45,6 +49,7 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgTypesReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -64,8 +69,10 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
             st = getType(res, schema.getName(), typtype);
         }
         if (st != null) {
-            loader.setOwner(st, res.getLong("typowner"));
-            loader.setPrivileges(st, res.getString("typacl"), schema.getName());
+            if (includePrivileges) {
+                loader.setOwner(st, res.getLong("typowner"));
+                loader.setPrivileges(st, res.getString("typacl"), schema.getName());
+            }
             loader.setAuthor(st, res);
             loader.setComment(st, res);
         }
@@ -92,19 +99,49 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
 
         IDatabase dataBase = schema.getDatabase();
 
-        String def = res.getString("dom_defaultbin");
-        if (def == null) {
-            def = res.getString("typdefault");
-            if (def != null) {
-                def = Utils.quoteString(def);
+        String defaultBin = res.getString("dom_defaultbin");
+        if (defaultBin == null) {
+            // typdefault is the external form of the default, which this branch
+            // only quotes. The result is a single string-literal token and so is
+            // its own normalized form - the same text belongs in both halves and
+            // no normalizer is needed here, which is asserted rather than assumed
+            // by PgTypesReaderDomainTest.theLiteralBranchIsItsOwnNormalizedForm
+            //
+            // the branch is rare but live: DefineDomain inherits both default
+            // columns from the base type's row (typecmds.c:844-856) while
+            // DefineType stores only the external form and an explicit NULL
+            // binary one (:592-593), so a domain over a base type whose CREATE
+            // TYPE set a DEFAULT arrives here with typdefaultbin empty
+            String literal = res.getString("typdefault");
+            if (literal != null) {
+                literal = Utils.quoteString(literal);
             }
+            d.setDefaultValue(literal, literal);
         } else {
-            loader.submitAntlrTask(def, p -> p.vex_eof().vex().get(0),
-                    ctx -> dataBase.addAnalysisLauncher(
-                            new PgVexAnalysisLauncher(d, ctx, loader.getCurrentLocation())));
+            // the catalog's own text is stored here and unconditionally, before
+            // the task is submitted: the finalizer below runs only when this
+            // task's parse reported no errors (AbstractJdbcLoader:377), and an
+            // expression this grammar cannot read must still reach the model
+            // - without it the domain would be written out with no DEFAULT at all
+            //
+            // both halves get it, and the normalized one must not be left empty:
+            // compare and computeHash read only that half, so an unreadable
+            // DEFAULT would otherwise compare equal to no DEFAULT at all and the
+            // difference would vanish from the tree and from the script. On a
+            // successful parse the finalizer overwrites it with the real
+            // normalization
+            d.setDefaultValue(defaultBin, defaultBin);
+            loader.submitAntlrTask(defaultBin,
+                    p -> new Pair<>(p.vex_eof().vex().get(0), (CommonTokenStream) p.getTokenStream()),
+                    pair -> {
+                        var vex = pair.getFirst();
+                        d.setDefaultValue(defaultBin,
+                                PgParserUtils.normalizeWhitespaceUnquoted(vex, pair.getSecond()));
+                        dataBase.addAnalysisLauncher(
+                                new PgVexAnalysisLauncher(d, vex, loader.getCurrentLocation()));
+                    });
         }
 
-        d.setDefaultValue(def);
         d.setNotNull(res.getBoolean("dom_notnull"));
 
         String[] connames = PgJdbcUtils.getColArray(res, "dom_connames", true);
@@ -118,11 +155,21 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
                 var constrCheck = new PgConstraintCheck(conName);
                 String definition = condefs[i];
                 IPgJdbcReader.checkObjectValidity(definition, DbObjType.CONSTRAINT, conName);
+                // the same store-before-submit the table constraints get, and
+                // for the same reason: the finalizer below runs only when this
+                // task's parse reported no errors (AbstractJdbcLoader:377),
+                // while addConstraint below is reached either way, and a domain
+                // CHECK with no expression is written into CREATE DOMAIN as
+                // CHECK (null) - which forbids nothing
+                constrCheck.setCatalogDefinition(getTextWithCheckNewLines(definition));
                 loader.submitAntlrTask(ADD_CONSTRAINT + definition + ';',
-                        p -> p.sql().statement(0).schema_statement().schema_alter()
-                                .alter_domain_statement().dom_constraint,
-                        ctx -> PgCreateDomain.parseDomainConstraint(d, constrCheck, ctx, dataBase,
-                                loader.getCurrentLocation(), settings));
+                        p -> new Pair<>(p.sql().statement(0).schema_statement().schema_alter()
+                                .alter_domain_statement().dom_constraint, (CommonTokenStream) p.getTokenStream()),
+                        pair -> {
+                            PgCreateDomain.parseDomainConstraint(d, constrCheck, pair.getFirst(), dataBase,
+                                    loader.getCurrentLocation(), pair.getSecond(), settings);
+                            constrCheck.setCatalogDefinition(null);
+                        });
 
                 d.addConstraint(constrCheck);
                 if (concomments[i] != null && !concomments[i].isEmpty()) {
@@ -384,13 +431,19 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
                 .with("nspnames", "SELECT n.oid, n.nspname FROM pg_catalog.pg_namespace n")
                 .with("collations",
                         "SELECT c.oid, c.collname, n.nspname FROM pg_catalog.pg_collation c LEFT JOIN nspnames n ON n.oid = c.collnamespace")
-                .column("res.typname")
-                .column("res.typowner::bigint")
-                .column("res.typacl::text")
+                .column("res.typname");
+        if (includePrivileges) {
+            builder
+                    .column("res.typowner::bigint")
+                    .column("res.typacl::text");
+        }
+        builder
                 .column("res.typtype")
                 .from("pg_catalog.pg_type res")
                 .where("res.typisdefined = TRUE")
-                .where("(res.typrelid = 0 OR (SELECT c.relkind FROM pg_catalog.pg_class c WHERE c.oid = res.typrelid) = 'c')")
+                .where(loader.isGreenplumDb()
+                        ? "(res.typrelid = 0 OR (SELECT c.relkind FROM pg_catalog.pg_class c WHERE c.oid = res.typrelid) = 'c')"
+                        : "(res.typrelid = 0 OR EXISTS (SELECT 1 FROM composite_relations type_rel WHERE type_rel.oid = res.typrelid))")
                 .where("NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = res.typelem AND el.typarray = res.oid)")
 
                 // for base and domain
@@ -404,6 +457,9 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
         addBasePart(builder);
         addDomainPart(builder);
         addCompositePart(builder);
+        if (!loader.isGreenplumDb()) {
+            builder.orderBy("res.oid");
+        }
     }
 
     private void addRangePart(QueryBuilder builder) {
@@ -465,6 +521,8 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
                 .column("pg_catalog.array_agg(pg_catalog.pg_get_constraintdef(c.oid) ORDER BY c.conname) AS condefs")
                 .column("pg_catalog.array_agg(cd.description ORDER BY c.conname) AS concomments")
                 .from("pg_catalog.pg_constraint c")
+                .join("JOIN pg_catalog.pg_type dt ON dt.oid = c.contypid")
+                .join("  AND dt.typnamespace IN (" + loader.getSchemas() + ')')
                 .join("LEFT JOIN pg_catalog.pg_description cd ON cd.objoid = c.oid")
                 .join("  AND cd.classoid = 'pg_catalog.pg_constraint'::pg_catalog.regclass")
                 .where("c.contypid != 0")
@@ -478,6 +536,13 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
     }
 
     private void addCompositePart(QueryBuilder builder) {
+        QueryBuilder compositeRelations = new QueryBuilder()
+                .column("target.oid")
+                .from("pg_catalog.pg_class target")
+                .where("target.relkind = 'c'")
+                .where("target.relnamespace IN (" + loader.getSchemas() + ')');
+        builder.with("composite_relations", compositeRelations);
+
         QueryBuilder columns = new QueryBuilder()
                 .column("a.attrelid")
                 .column("pg_catalog.array_agg(a.attname ORDER BY a.attnum) AS attnames")
@@ -489,6 +554,7 @@ public final class PgTypesReader extends PgAbstractSearchPathJdbcReader {
                 .column("pg_catalog.array_agg(cl.nspname ORDER BY a.attnum) AS attcollationnspnames")
                 .column("pg_catalog.array_agg(d.description ORDER BY a.attnum) AS attcomments")
                 .from("pg_catalog.pg_attribute a")
+                .join("JOIN composite_relations target ON target.oid = a.attrelid")
                 .join("LEFT JOIN pg_catalog.pg_type ta ON ta.oid = a.atttypid")
                 .join("LEFT JOIN collations cl ON cl.oid = a.attcollation")
                 .join("LEFT JOIN pg_catalog.pg_description d ON d.objoid = a.attrelid AND d.objsubid = a.attnum")

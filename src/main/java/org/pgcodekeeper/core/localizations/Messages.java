@@ -33,6 +33,14 @@ public final class Messages {
 
     public static String AbstractJdbcConnector_url_validation_failed;
 
+    public static String ColumnVisibility_hidden_column_still_needed;
+
+    public static String ColumnVisibility_log_column_kept;
+
+    public static String ColumnVisibility_log_table_kept_whole;
+
+    public static String RecasedColumns_log_column_recased;
+
     public static String AbstractLibraryLoader_error_while_read_library;
 
     public static String AbstractAnalysisLauncher_error_prefix;
@@ -61,6 +69,10 @@ public final class Messages {
 
     public static String DependenciesReader_parser_error;
 
+    public static String DependenciesReader_error_bad_deps_list;
+
+    public static String DependenciesReader_error_analyzing_deps_list;
+
     public static String AbstractStatement_already_has_a_parent;
 
     public static String AbstractStatement_null_statement;
@@ -69,6 +81,8 @@ public final class Messages {
     public static String Utils_unsupported_sequence_type;
 
     public static String Utils_not_object_in_database;
+
+    public static String Utils_comparison_loader_factories_required;
 
     public static String Utils_failed_to_load_databases;
 
@@ -85,6 +99,10 @@ public final class Messages {
     // pgdiff.loader
     public static String CompareTree_missing_compare;
 
+    public static String ComparisonLoaderCoordinator_failed;
+
+    public static String ComparisonLoaderCoordinator_termination_timeout;
+
     public static String Connection_DatabaseJdbcAccessError;
 
     public static String Constraint_WarningMismatchedConstraintTypeForClusterOn;
@@ -94,6 +112,8 @@ public final class Messages {
     public static String CustomParserListener_statement_context_is_missing;
 
     public static String ProjectUpdater_error_backup_restore;
+
+    public static String ProjectUpdater_error_backup_restore_kept;
 
     public static String ProjectUpdater_error_no_tempdir;
 
@@ -175,6 +195,10 @@ public final class Messages {
 
     public static String DiffTree_both_diff_sides_are_null;
 
+    public static String DiffTree_log_hidden_children_only;
+
+    public static String DiffTree_log_ignore_obj;
+
     public static String FileUtils_creating_temp_directory;
 
     public static String FileUtils_creating_temp_file;
@@ -184,6 +208,10 @@ public final class Messages {
     public static String Function_log_variable_not_found;
 
     public static String IPgJdbcReader_ConcurrentModificationException;
+
+    public static String IgnoreParser_error_analyzing_ignore_list;
+
+    public static String IgnoreParser_error_bad_ignore_list;
 
     public static String IgnoreParser_log_ignor_list_analyzing_err;
 
@@ -294,6 +322,18 @@ public final class Messages {
     public static String Storage_WarningUnableToDetermineStorageType;
 
     public static String ActionsToScriptConverter_not_allowed_object;
+
+    public static String ActionsToScriptConverter_owned_sequence_requires_table_owner;
+
+    public static String ActionsToScriptConverter_owned_sequence_requires_column;
+
+    public static String ActionsToScriptConverter_owned_sequence_requires_known_owner;
+
+    public static String ActionsToScriptConverter_surviving_owned_sequence_requires_detach;
+
+    public static String ActionsToScriptConverter_removed_owned_sequence_requires_cascade;
+
+    public static String ActionsToScriptConverter_surviving_owned_sequence_requires_recreate;
 
     public static String ActionsToScriptConverter_not_implemented_action;
 

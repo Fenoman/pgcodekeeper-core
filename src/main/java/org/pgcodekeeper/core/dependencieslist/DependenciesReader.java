@@ -41,16 +41,57 @@ public final class DependenciesReader {
 
     private DependenciesReader() {}
 
+    /**
+     * Reads the additional dependencies declared by a
+     * {@code .pgcodekeeperdependencies} file.
+     * <p>
+     * The read is fail-fast: any syntax error or analysis failure raises a
+     * {@link DependenciesListParseException} instead of silently producing a
+     * partially populated - in practice, empty - dependency list. These edges
+     * only add ordering to the generated script, so an empty read fails nothing
+     * and is reported nowhere: the script comes out in a different order, or
+     * short of statements, and the run stays green. An absent file is a
+     * different thing entirely and stays one: a project that declares no
+     * additional dependencies is normal.
+     *
+     * @param depsPath path to the dependencies file
+     * @return the declared dependencies, empty if the file does not exist
+     * @throws DependenciesListParseException if the file exists but cannot be
+     *                                        read, parsed or analyzed
+     */
     public static List<Dependency> getDependencies(Path depsPath) {
-        if (Files.isRegularFile(depsPath)) {
-            try {
-                var parser = ParserUtils.createDependenciesListParser(depsPath);
-                return new DependenciesReader().getDependencies(parser);
-            } catch (Exception ex) {
-                LOG.error(Messages.DependenciesReader_parser_error.formatted(depsPath), ex);
-            }
+        if (!Files.isRegularFile(depsPath)) {
+            return new ArrayList<>();
         }
-        return new ArrayList<>();
+
+        String parsedObjectName = depsPath.toString();
+        List<Object> errors = new ArrayList<>();
+        List<Dependency> dependencies = null;
+        Exception analyzeException = null;
+        try {
+            var parser = ParserUtils.createDependenciesListParser(depsPath, errors);
+            dependencies = new DependenciesReader().getDependencies(parser);
+        } catch (Exception ex) {
+            analyzeException = ex;
+            LOG.error(Messages.DependenciesReader_parser_error.formatted(parsedObjectName), ex);
+        }
+
+        if (!errors.isEmpty()) {
+            // syntax errors carry precise location info and usually explain
+            // any subsequent analysis failure, report them first
+            throw new DependenciesListParseException(
+                    // an AntlrError already spells out the file it came from,
+                    // then the line, the column and what it choked on
+                    Messages.DependenciesReader_error_bad_deps_list.formatted(errors.get(0)),
+                    parsedObjectName, analyzeException);
+        }
+        if (analyzeException != null) {
+            throw new DependenciesListParseException(
+                    Messages.DependenciesReader_error_analyzing_deps_list.formatted(
+                            parsedObjectName, analyzeException),
+                    parsedObjectName, analyzeException);
+        }
+        return dependencies;
     }
 
     private List<Dependency> getDependencies(DependenciesListParser parser) {

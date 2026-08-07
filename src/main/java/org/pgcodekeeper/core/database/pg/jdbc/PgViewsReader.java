@@ -34,6 +34,8 @@ import org.pgcodekeeper.core.utils.Utils;
  */
 public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
 
+    private final boolean includePrivileges;
+
     /**
      * Constructs a new PgViewsReader.
      *
@@ -41,6 +43,7 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
      */
     public PgViewsReader(PgJdbcLoader loader) {
         super(loader);
+        includePrivileges = !loader.getSettings().isIgnorePrivileges();
     }
 
     @Override
@@ -81,6 +84,22 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
 
         IDatabase dataBase = schema.getDatabase();
 
+        // the catalog's own query is stored here and unconditionally, before the
+        // task is submitted: the finalizer below runs only when this task's
+        // parse reported no errors (AbstractJdbcLoader:377), while the view
+        // reaches its schema either way. Without it neither half is ever
+        // written, and a view is its query: PgAbstractView.getCreationSQL sizes
+        // its builder from query.length() before writing a character, so an
+        // unreadable query used to end the whole load in a NullPointerException
+        // rather than in a view
+        //
+        // both halves get it, and the normalized one must not be left empty:
+        // compare, computeHash and needDrop read only that half, so an
+        // unreadable query would otherwise compare equal to any other unreadable
+        // one and the difference would vanish from the tree and from the script.
+        // On a successful parse the finalizer overwrites it with the real
+        // normalization
+        v.setQuery(query, query);
         loader.submitAntlrTask(viewDef,
                 p -> new Pair<>(
                         p.sql().statement(0).data_statement().select_stmt(),
@@ -88,7 +107,8 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
                 pair -> {
                     dataBase.addAnalysisLauncher(new PgViewAnalysisLauncher(
                             v, pair.getFirst(), loader.getCurrentLocation()));
-                    v.setQuery(query, PgParserUtils.normalizeWhitespaceUnquoted(pair.getFirst(), pair.getSecond()));
+                    v.setQuery(query, PgParserUtils.normalizeViewQueryForComparison(
+                            pair.getFirst(), pair.getSecond()));
                 });
 
 
@@ -97,10 +117,13 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
         if (colNames != null) {
             String[] colComments = PgJdbcUtils.getColArray(res, "column_comments");
             String[] colDefaults = PgJdbcUtils.getColArray(res, "column_defaults");
-            String[] colACLs = PgJdbcUtils.getColArray(res, "column_acl");
+            String[] colTypes = PgJdbcUtils.getColArray(res, "column_types");
+            String[] colACLs = includePrivileges
+                    ? PgJdbcUtils.getColArray(res, "column_acl") : null;
 
             for (int i = 0; i < colNames.length; i++) {
                 String colName = colNames[i];
+                v.addRelationColumn(colName, colTypes[i]);
                 String colDefault = colDefaults[i];
                 if (colDefault != null) {
                     ((PgView) v).addColumnDefaultValue(colName, colDefault);
@@ -112,16 +135,20 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
                 if (colComment != null) {
                     v.addColumnComment(colName, getTextWithCheckNewLines(Utils.quoteString(colComment)));
                 }
-                String colAcl = colACLs[i];
-                // Привилегии на столбцы view записываются в саму view
-                if (colAcl != null) {
-                    loader.setPrivileges(v, colAcl, colName, schemaName);
+                if (includePrivileges) {
+                    String colAcl = colACLs[i];
+                    // Привилегии на столбцы view записываются в саму view
+                    if (colAcl != null) {
+                        loader.setPrivileges(v, colAcl, colName, schemaName);
+                    }
                 }
             }
         }
 
-        loader.setOwner(v, res.getLong("relowner"));
-        loader.setPrivileges(v, res.getString("relacl"), schemaName);
+        if (includePrivileges) {
+            loader.setOwner(v, res.getLong("relowner"));
+            loader.setPrivileges(v, res.getString("relacl"), schemaName);
+        }
         loader.setAuthor(v, res);
         loader.setComment(v, res);
 
@@ -132,11 +159,6 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
         }
 
         schema.addChild(v);
-    }
-
-    @Override
-    public void setQueryParams(PreparedStatement statement) throws SQLException {
-        statement.setBoolean(1, loader.getSettings().isSimplifyView());
     }
 
     @Override
@@ -158,17 +180,24 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
         builder
                 .column("res.relname")
                 .column("res.relkind AS kind")
-                .column("tabsp.spcname as table_space")
-                .column("res.relacl::text")
-                .column("res.relowner::bigint")
-                .column("pg_catalog.pg_get_viewdef(res.oid, ?) AS definition")
+                .column("tabsp.spcname as table_space");
+        if (includePrivileges) {
+            builder
+                    .column("res.relacl::text")
+                    .column("res.relowner::bigint");
+        }
+        builder
+                .column("pg_catalog.pg_get_viewdef(res.oid, "
+                        + loader.getSettings().isSimplifyView()
+                        + ") AS definition")
                 .column("res.reloptions")
                 .column("am.amname AS access_method")
                 .column("res.relispopulated")
                 .from("pg_catalog.pg_class res")
                 .join("LEFT JOIN pg_catalog.pg_tablespace tabsp ON tabsp.oid = res.reltablespace")
                 .join("LEFT JOIN pg_catalog.pg_am am ON am.oid = res.relam")
-                .where("res.relkind IN ('v','m')");
+                .where("res.relkind IN ('v','m')")
+                .orderBy("res.oid");
 
         if (loader.isGreenplumDb()) {
             builder.column("pg_get_table_distributedby(res.oid) AS distribution");
@@ -176,13 +205,25 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
     }
 
     private void addColumnsPart(QueryBuilder builder) {
+        QueryBuilder targetViews = new QueryBuilder()
+                .column("target.oid")
+                .from("pg_catalog.pg_class target")
+                .where("target.relkind IN ('v','m')")
+                .where("target.relnamespace IN (" + loader.getSchemas() + ')');
+        builder.with("target_views", targetViews);
+
         QueryBuilder columns = new QueryBuilder()
                 .column("attrelid")
                 .column("pg_catalog.array_agg(attr.attname ORDER BY attr.attnum) AS column_names")
                 .column("pg_catalog.array_agg(des.description ORDER BY attr.attnum) AS column_comments")
                 .column("pg_catalog.array_agg(pg_catalog.pg_get_expr(def.adbin, def.adrelid) ORDER BY attr.attnum) AS column_defaults")
-                .column("pg_catalog.array_agg(attr.attacl::text ORDER BY attr.attnum) AS column_acl")
+                .column("pg_catalog.array_agg(pg_catalog.format_type(attr.atttypid, attr.atttypmod) ORDER BY attr.attnum) AS column_types");
+        if (includePrivileges) {
+            columns.column("pg_catalog.array_agg(attr.attacl::text ORDER BY attr.attnum) AS column_acl");
+        }
+        columns
                 .from("pg_catalog.pg_attribute attr")
+                .join("JOIN target_views target ON target.oid = attr.attrelid")
                 .join("LEFT JOIN pg_catalog.pg_attrdef def ON def.adnum = attr.attnum")
                 .join("  AND attr.attrelid = def.adrelid")
                 .join("  AND attr.attisdropped IS FALSE")
@@ -194,7 +235,10 @@ public final class PgViewsReader extends PgAbstractSearchPathJdbcReader {
         builder.column("subselect.column_names");
         builder.column("subselect.column_comments");
         builder.column("subselect.column_defaults");
-        builder.column("subselect.column_acl");
+        builder.column("subselect.column_types");
+        if (includePrivileges) {
+            builder.column("subselect.column_acl");
+        }
         builder.join("LEFT JOIN", columns, "subselect ON subselect.attrelid = res.oid");
     }
 }

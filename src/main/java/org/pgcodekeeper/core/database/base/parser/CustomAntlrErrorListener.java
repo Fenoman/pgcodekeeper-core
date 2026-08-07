@@ -72,7 +72,8 @@ final class CustomAntlrErrorListener extends BaseErrorListener {
     public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol,
                             int line, int charPositionInLine, String msg, RecognitionException e) {
         Token token = offendingSymbol instanceof Token t ? t : null;
-        AntlrError error = new AntlrError(token, parsedObjectName, line, charPositionInLine, msg)
+        AntlrError error = new AntlrError(token, parsedObjectName, line,
+                positionInLine(recognizer, token, charPositionInLine), msg)
                 .copyWithOffset(offset, lineOffset, inLineOffset);
 
         var warningMsg = Messages.CustomAntlrErrorListener_error.formatted(error);
@@ -80,5 +81,42 @@ final class CustomAntlrErrorListener extends BaseErrorListener {
         if (errors != null) {
             errors.add(error);
         }
+    }
+
+    /**
+     * Returns the position of the error in its line, counted in UTF-16 code
+     * units.
+     * <p>
+     * ANTLR counts that position in code points, while every other coordinate
+     * this error carries is counted in code units: its start and stop offsets
+     * come from {@link CodeUnitToken}, and {@link #inLineOffset}, which a
+     * deferred sub parse adds on top, is a code unit position as well. Adding
+     * the two together produced a column that drifted by one per astral
+     * character - an emoji, a rare ideograph - earlier on the same line, and
+     * put the two error sources of one line on different scales: the
+     * unresolved reference path already reads
+     * {@link CodeUnitToken#getCodeUnitPositionInLine()} directly.
+     * <p>
+     * A token knows both numbers, so take the code unit one from it whenever
+     * there is a token to ask. A lexer error has none - it fires before any
+     * token is built - and there the lexer itself is asked for the drift of the
+     * line it is on, which is what it would have added to the very same code
+     * point position had the token been emitted. Grammars whose lexer is not a
+     * {@link CodeUnitLexer}, the ignore and dependency lists, keep the position
+     * ANTLR reported: they count in code points throughout.
+     *
+     * @param recognizer         the parser or lexer that reported the error
+     * @param token              the offending token, or null
+     * @param charPositionInLine the position ANTLR reported, in code points
+     * @return the position in code units wherever it can be established
+     */
+    private static int positionInLine(Recognizer<?, ?> recognizer, Token token, int charPositionInLine) {
+        if (token instanceof CodeUnitToken codeUnitToken) {
+            return codeUnitToken.getCodeUnitPositionInLine();
+        }
+        if (recognizer instanceof CodeUnitLexer lexer) {
+            return charPositionInLine + lexer.getCurrentLineOffset();
+        }
+        return charPositionInLine;
     }
 }

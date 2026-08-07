@@ -17,11 +17,14 @@ package org.pgcodekeeper.core.database.pg.jdbc;
 
 import java.sql.*;
 
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.jdbc.QueryBuilder;
 import org.pgcodekeeper.core.database.pg.loader.PgJdbcLoader;
 import org.pgcodekeeper.core.database.pg.parser.statement.PgCreateRule;
 import org.pgcodekeeper.core.database.pg.schema.PgRule;
+import org.pgcodekeeper.core.utils.Pair;
+import org.pgcodekeeper.core.utils.Utils;
 
 /**
  * Reader for PostgreSQL rules.
@@ -87,10 +90,33 @@ public final class PgRulesReader extends PgAbstractSearchPathJdbcReader {
                 break;
         }
 
-        loader.submitAntlrTask(command, p -> p.sql().statement(0)
-                        .schema_statement().schema_create().create_rewrite_statement(),
-                ctx -> PgCreateRule.setConditionAndAddCommands(ctx, r,
-                        schema.getDatabase(), loader.getCurrentLocation(), loader.getSettings()));
+        // both halves of the condition are assigned inside the finalizer, which
+        // the loader runs only for a definition that parsed (AbstractJdbcLoader:377)
+        // - the same is true of the action commands, and was true of the
+        // condition before it grew a normalized half. There is no raw value to
+        // split into ahead of the parse: pg_get_ruledef() returns one string,
+        // and splitting it into a condition and its commands is exactly what the
+        // parse is for.
+        //
+        // So the whole string is kept instead. A rule that reaches the generator
+        // with no commands is written out as DO NOTHING - a statement the server
+        // accepts, and which on an INSTEAD rule silently swallows every write it
+        // fires on - and its WHERE would be gone with them. With the definition
+        // in hand the generator emits the server's own statement verbatim,
+        // which on the successful path is what it assembles anyway: the
+        // condition and every command are sub-spans of this very string.
+        r.setCatalogDefinition(Utils.checkNewLines(command, loader.getSettings().isKeepNewlines()));
+        loader.submitAntlrTask(command,
+                p -> new Pair<>(p.sql().statement(0).schema_statement().schema_create().create_rewrite_statement(),
+                        (CommonTokenStream) p.getTokenStream()),
+                pair -> {
+                    PgCreateRule.setConditionAndAddCommands(pair.getFirst(), r, schema.getDatabase(),
+                            loader.getCurrentLocation(), pair.getSecond(), loader.getSettings());
+                    // the model now carries both halves of the condition and
+                    // every command, so the generator builds the statement from
+                    // them and the kept string is dropped
+                    r.setCatalogDefinition(null);
+                });
 
         loader.setAuthor(r, res);
         loader.setComment(r, res);
