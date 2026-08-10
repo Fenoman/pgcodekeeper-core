@@ -28,7 +28,7 @@ jobs:
           content: ${{ secrets.KEY_JKS_BASE_64 }}
 
       - name: decode keystore
-        run: base64 --decode -i tmp/keystore/key.txt -o tmp/keystore/key.jks
+        run: base64 --decode tmp/keystore/key.txt > tmp/keystore/key.jks
 
       - name: Import GPG key
         env: 
