@@ -9,9 +9,15 @@
 
 ### Добавлено
 
-- Добавлена подпись jar файла.
-
 ### Изменено
+
+### Исправлено
+
+## [15.2.0] - 2026-08-10
+
+### Добавлено
+
+- Добавлена подпись jar файла.
 
 ### Исправлено
 
@@ -2567,7 +2573,8 @@
 
 - Добавлен парсинг ORDER BY для агрегатных функции.
 
-[Новое]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.1.0...HEAD
+[Новое]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.2.0...HEAD
+[15.2.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.1.0...v15.2.0
 [15.1.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.0.0...v15.1.0
 [15.0.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.7.0...v15.0.0
 [14.7.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.6.0...v14.7.0
