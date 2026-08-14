@@ -22,8 +22,10 @@ package org.pgcodekeeper.core.database.pg.schema;
 import java.util.Objects;
 
 import org.pgcodekeeper.core.database.api.schema.IStatement;
+import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 
 /**
  * PostgreSQL materialized view implementation.
@@ -97,16 +99,27 @@ public class PgMaterializedView extends PgAbstractView {
             }
             script.addStatement(sql);
         }
+
+        var setting = script.getSettings();
+        if (checkSyntaxVersion(setting, PgSupportedVersion.VERSION_15) && !Objects.equals(method, newMatView.method)) {
+            StringBuilder sql = new StringBuilder();
+            sql.append("ALTER ").append(getTypeName()).append(' ');
+            if (setting.isGenerateExists()) {
+                sql.append(IF_EXISTS);
+            }
+            sql.append(newMatView.getQualifiedName()).append(" SET ACCESS METHOD ").append(newMatView.method);
+            script.addStatement(sql);
+        }
     }
 
     @Override
-    protected boolean needDrop(final PgAbstractView newView) {
-        if (super.needDrop(newView)) {
+    protected boolean needDrop(final PgAbstractView newView, ISettings settings) {
+        if (super.needDrop(newView, settings)) {
             return true;
         }
 
         var newMatView = (PgMaterializedView) newView;
-        return !Objects.equals(method, newMatView.method)
+        return (!checkSyntaxVersion(settings, PgSupportedVersion.VERSION_15) && !Objects.equals(method, newMatView.method))
                 || !Objects.equals(distribution, newMatView.distribution);
     }
 
