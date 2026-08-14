@@ -27,6 +27,7 @@ import org.pgcodekeeper.core.database.api.schema.*;
 import org.pgcodekeeper.core.database.base.schema.*;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 import org.pgcodekeeper.core.utils.Pair;
 
 /**
@@ -125,7 +126,7 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
     @Override
     public ObjectState appendAlterSQL(IStatement newCondition, SQLScript script) {
         PgAbstractView newAbstractView = (PgAbstractView) newCondition;
-        if (needDrop(newAbstractView)) {
+        if (needDrop(newAbstractView, script.getSettings())) {
             return ObjectState.RECREATE;
         }
 
@@ -145,9 +146,10 @@ public abstract class PgAbstractView extends PgAbstractStatementContainer implem
      * modified.
      *
      * @param newView new view
+     * @param settings the settings to use for SQL generation and formatting 
      * @return true if view has been modified, otherwise false
      */
-    protected boolean needDrop(final PgAbstractView newView) {
+    protected boolean needDrop(final PgAbstractView newView, ISettings settings) {
         if (getClass() != newView.getClass()) {
             return true;
         }

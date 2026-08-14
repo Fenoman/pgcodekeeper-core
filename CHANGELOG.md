@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+- Added generation of a migration script taking into account the PostgreSQL version when the `Use current database version syntax to generate migration script` setting is enabled.
+
 ### Changed
 
 ### Fixed
