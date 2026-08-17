@@ -727,6 +727,8 @@ class PgDiffTest {
         "alter_greenplum_table_compression_dbv, GP_VERSION_7",
         "alter_materialized_view_dbv, VERSION_14",
         "alter_materialized_view_dbv, VERSION_15",
+        "alter_table_access_method_dbv, VERSION_14",
+        "alter_table_access_method_dbv, VERSION_15",
     })
     void actualVersionSyntaxTest(String fileNameTemplate, String version) throws IOException, InterruptedException {
         var settings = new CoreSettings();
