@@ -729,6 +729,12 @@ class PgDiffTest {
         "alter_materialized_view_dbv, VERSION_15",
         "alter_table_access_method_dbv, VERSION_14",
         "alter_table_access_method_dbv, VERSION_15",
+        "alter_operator_dbv, VERSION_16",
+        "alter_operator_dbv, VERSION_17",
+        "alter_operator_reverse_dbv, VERSION_16",
+        "alter_operator_reverse_dbv, VERSION_17",
+        "alter_operator_equals_dbv, VERSION_16",
+        "alter_operator_equals_dbv, VERSION_17",
     })
     void actualVersionSyntaxTest(String fileNameTemplate, String version) throws IOException, InterruptedException {
         var settings = new CoreSettings();
