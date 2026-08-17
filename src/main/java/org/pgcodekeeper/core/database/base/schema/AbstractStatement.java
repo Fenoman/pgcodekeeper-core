@@ -502,7 +502,8 @@ public abstract class AbstractStatement implements IStatement, IHashable {
     }
 
     protected boolean checkSyntaxVersion(ISettings settings, ISupportedVersion version) {
-        return settings.isUseActualVersionSyntax()
+        return null != settings 
+                && settings.isUseActualVersionSyntax()
                 && version.isLE(settings.getVersion().getVersion());
     }
 

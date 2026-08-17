@@ -18,8 +18,10 @@ package org.pgcodekeeper.core.database.pg.schema;
 import java.util.Objects;
 
 import org.pgcodekeeper.core.database.api.schema.*;
+import org.pgcodekeeper.core.database.pg.jdbc.PgSupportedVersion;
 import org.pgcodekeeper.core.hasher.Hasher;
 import org.pgcodekeeper.core.script.SQLScript;
+import org.pgcodekeeper.core.settings.ISettings;
 
 /**
  * PostgreSQL operator implementation.
@@ -113,30 +115,34 @@ public class PgOperator extends PgAbstractStatement implements IOperator, ISearc
         int startSize = script.getSize();
         PgOperator newOperator = (PgOperator) newCondition;
 
-        if (!compareUnalterable(newOperator)) {
+        if (!compareUnalterable(newOperator, script.getSettings())) {
             return ObjectState.RECREATE;
         }
 
-        String newOperRestr = newOperator.restrict;
-        String newOperJoin = newOperator.join;
-        boolean restrChanged = !Objects.equals(restrict, newOperRestr);
-        boolean joinChanged = !Objects.equals(join, newOperJoin);
-        if (restrChanged || joinChanged) {
-            StringBuilder sql = new StringBuilder();
-            sql.append("ALTER OPERATOR ")
-                    .append(getQualifiedName())
-                    .append("\n\tSET (");
-            if (restrChanged) {
-                sql.append("RESTRICT = ").append(newOperRestr != null ? newOperRestr : "NONE");
-                if (joinChanged) {
-                    sql.append(", ");
-                }
-            }
-            if (joinChanged) {
-                sql.append("JOIN = ").append(newOperJoin != null ? newOperJoin : "NONE");
-            }
-            sql.append(")");
-            script.addStatement(sql);
+        StringBuilder sql = new StringBuilder();
+        if (!Objects.equals(restrict, newOperator.restrict)) {
+            sql.append("RESTRICT = ").append(newOperator.restrict != null ? newOperator.restrict : "NONE")
+            .append(", ");
+        }
+        if (!Objects.equals(join, newOperator.join)) {
+            sql.append("JOIN = ").append(newOperator.join != null ? newOperator.join : "NONE")
+                .append(", ");
+        }
+        if (!Objects.equals(commutator, newOperator.commutator)) {
+            sql.append("COMMUTATOR = ").append(newOperator.commutator).append(", ");
+        }
+        if (!Objects.equals(negator, newOperator.negator)) {
+            sql.append("NEGATOR = ").append(newOperator.commutator).append(", ");
+        }
+        if (isHashes != newOperator.isHashes) {
+            sql.append("HASHES, ");
+        }
+        if (isMerges != newOperator.isMerges) {
+            sql.append("MERGES, ");
+        }
+        if (!sql.isEmpty()) {
+            sql.setLength(sql.length() - 2);
+            script.addStatement("ALTER OPERATOR " + getQualifiedName() + "\n\tSET (" + sql.toString() + ')');
         }
 
         appendAlterOwner(newOperator, script);
@@ -286,19 +292,34 @@ public class PgOperator extends PgAbstractStatement implements IOperator, ISearc
             return true;
         }
         return obj instanceof PgOperator oper && super.compare(obj)
-                && compareUnalterable(oper)
+                && compareUnalterable(oper, null)
                 && Objects.equals(restrict, oper.restrict)
                 && Objects.equals(join, oper.join);
     }
 
-    private boolean compareUnalterable(PgOperator oper) {
-        return Objects.equals(procedure, oper.procedure)
-                && Objects.equals(leftArg, oper.leftArg)
-                && Objects.equals(rightArg, oper.rightArg)
-                && Objects.equals(commutator, oper.commutator)
+    private boolean compareUnalterable(PgOperator oper, ISettings settings) {
+        if (!compareCommonUnalterable(oper)) {
+            return false;
+        }
+
+        
+        if (checkSyntaxVersion(settings, PgSupportedVersion.VERSION_17)) {
+            return  (Objects.equals(commutator, oper.commutator) || null == commutator)
+                && (Objects.equals(negator, oper.negator) || null == negator)
+                && (isMerges == oper.isMerges || oper.isMerges)
+                && (isHashes == oper.isHashes || oper.isHashes);
+        }
+
+        return Objects.equals(commutator, oper.commutator)
                 && Objects.equals(negator, oper.negator)
                 && isMerges == oper.isMerges
                 && isHashes == oper.isHashes;
+    }
+
+    private boolean compareCommonUnalterable(PgOperator oper) {
+        return Objects.equals(procedure, oper.procedure)
+                && Objects.equals(leftArg, oper.leftArg)
+                && Objects.equals(rightArg, oper.rightArg);
     }
 
     @Override
