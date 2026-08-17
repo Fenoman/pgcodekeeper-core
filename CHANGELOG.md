@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Fixed
 
+### Security
+
+- Increased versions of org.apache.httpcomponents libraries due to CVE-2026-64607, CVE-2026-54399, CVE-2026-54428.
+
 ## [15.2.0] - 2026-08-10
 
 ### Added
