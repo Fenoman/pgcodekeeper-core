@@ -195,7 +195,7 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
         }
 
         var settings = script.getSettings();
-        if (checkSyntaxVersion(settings, PgSupportedVersion.GP_VERSION_7)
+        if ((checkSyntaxVersion(settings, PgSupportedVersion.VERSION_15) || PgSupportedVersion.GP_VERSION_7 == settings.getVersion())
                 && !Objects.equals(method, newRegTable.method)) {
             script.addStatement(getAlterTable(false) + " SET ACCESS METHOD " + newRegTable.method);
         }
@@ -263,7 +263,7 @@ public abstract class PgAbstractRegularTable extends PgAbstractTable implements 
     }
 
     private boolean compareMethod(PgAbstractRegularTable regTable, ISettings settings) {
-        if (checkSyntaxVersion(settings, PgSupportedVersion.GP_VERSION_7)) {
+        if (checkSyntaxVersion(settings, PgSupportedVersion.VERSION_15) || PgSupportedVersion.GP_VERSION_7 == settings.getVersion()) {
             return true;
         }
 
