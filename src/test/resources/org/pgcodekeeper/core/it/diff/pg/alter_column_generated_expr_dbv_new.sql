@@ -1,0 +1,3 @@
+CREATE TABLE public.t1 (
+    col1 int GENERATED ALWAYS AS (1 + 2) STORED
+);

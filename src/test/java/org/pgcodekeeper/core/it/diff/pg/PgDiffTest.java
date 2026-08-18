@@ -735,6 +735,8 @@ class PgDiffTest {
         "alter_operator_reverse_dbv, VERSION_17",
         "alter_operator_equals_dbv, VERSION_16",
         "alter_operator_equals_dbv, VERSION_17",
+        "alter_column_generated_expr_dbv, VERSION_16",
+        "alter_column_generated_expr_dbv, VERSION_17",
     })
     void actualVersionSyntaxTest(String fileNameTemplate, String version) throws IOException, InterruptedException {
         var settings = new CoreSettings();
