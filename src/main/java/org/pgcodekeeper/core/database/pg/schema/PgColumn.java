@@ -275,7 +275,7 @@ public class PgColumn extends PgAbstractStatement
         int startSize = script.getSize();
         PgColumn newColumn = (PgColumn) newCondition;
 
-        if (isGeneratedColumnChanged(newColumn)) {
+        if (!compareGenerationOption(newColumn, script.getSettings())) {
             return ObjectState.RECREATE;
         }
 
@@ -293,8 +293,7 @@ public class PgColumn extends PgAbstractStatement
 
         boolean isNeedDropDefault = !Objects.equals(type, newColumn.type)
                 && !Objects.equals(defaultValue, newColumn.defaultValue);
-
-        if (isNeedDropDefault) {
+        if (isNeedDropDefault && null == generationOption) {
             compareDefaults(defaultValue, null, null, script);
         }
         AtomicBoolean isNeedDependencies = new AtomicBoolean();
@@ -305,7 +304,14 @@ public class PgColumn extends PgAbstractStatement
         }
 
         String oldDefault = isNeedDropDefault ? null : defaultValue;
-        compareDefaults(oldDefault, newColumn.defaultValue, isNeedDependencies, script);
+        if (null == generationOption) {
+            compareDefaults(oldDefault, newColumn.defaultValue, isNeedDependencies, script);
+        } else if (!Objects.equals(oldDefault, newColumn.defaultValue)) {
+            StringBuilder sql = new StringBuilder();
+            sql.append(getAlterTableColumn(true, name));
+            sql.append(" SET EXPRESSION AS (" + newColumn.defaultValue + ')');
+            script.addStatement(sql);
+        }
         compareNotNull(this, newColumn, script);
         compareStorages(storage, newColumn.storage, script);
         compareCompression(compression, newColumn.compression, script);
@@ -321,20 +327,19 @@ public class PgColumn extends PgAbstractStatement
         return getObjectState(isNeedDependencies.get(), script, startSize);
     }
 
-    private boolean isGeneratedColumnChanged(PgColumn newColumn) {
-        if (Objects.equals(generationOption, newColumn.generationOption)) {
-            if (generationOption == null) {
-                return false;
-            }
-
-            if (Objects.equals(defaultValue, newColumn.defaultValue)
-                    && Objects.equals(type, newColumn.type)
-                    && Objects.equals(collation, newColumn.collation)) {
-                return false;
-            }
+    private boolean compareGenerationOption(PgColumn newColumn, ISettings settings) {
+        if (!Objects.equals(generationOption, newColumn.generationOption)) {
+            return false;
         }
 
-        return true;
+        if (generationOption == null) {
+            return true;
+        }
+
+        return Objects.equals(type, newColumn.type)
+            && Objects.equals(collation, newColumn.collation)
+            && (Objects.equals(defaultValue, newColumn.defaultValue)
+                    || checkSyntaxVersion(settings, PgSupportedVersion.VERSION_17));
     }
 
     private boolean compareCompressOptions(PgColumn newColumn) {
