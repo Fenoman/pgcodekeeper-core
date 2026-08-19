@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Fixed
 
+- Fixed a conflict when reading a schematic file when processing individual project files.
+
 ### Security
 
 - Increased versions of org.apache.httpcomponents libraries due to CVE-2026-64607, CVE-2026-54399, CVE-2026-54428.

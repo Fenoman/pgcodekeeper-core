@@ -464,10 +464,14 @@ public abstract class ParserAbstract<S extends IDatabase> {
         // override the default schema location if we created it
         if (defaultSchema != null && defaultSchema.getBareName().equals(name)
                 && defaultSchema.getLocation().getFilePath() == null) {
-            var location = getLocation(List.of(nameCtx), DbObjType.SCHEMA, ACTION_CREATE, false, null,
-                    LocationType.DEFINITION);
-            defaultSchema.setLocation(location);
+            setLocation(defaultSchema, nameCtx);
             return defaultSchema;
+        }
+
+        if (ParserListenerMode.SINGLE == parserMode) {
+            var schema = getSafe(IDatabase::getSchema, db, nameCtx);
+            setLocation(schema, nameCtx);
+            return schema;
         }
 
         ISchema schema = createSchema(name);
@@ -479,5 +483,11 @@ public abstract class ParserAbstract<S extends IDatabase> {
 
     private void addReference(ObjectLocation loc) {
         db.addReference(fileName, loc);
+    }
+
+    private void setLocation(ISchema schema, ParserRuleContext nameCtx) {
+        var location = getLocation(List.of(nameCtx), DbObjType.SCHEMA, ACTION_CREATE, false, null,
+                    LocationType.DEFINITION);
+        schema.setLocation(location);
     }
 }
