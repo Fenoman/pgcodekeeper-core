@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
-- Added generation of a migration script taking into account the PostgreSQL version when the `Use current database version syntax to generate migration script` setting is enabled.
-
 ### Changed
+
+### Fixed
+
+## [15.3.0] - 2026-08-10
+
+### Added
+
+- Added generation of a migration script taking into account the PostgreSQL version when the `Use current database version syntax to generate migration script` setting is enabled.
 
 ### Fixed
 
@@ -2580,7 +2586,8 @@ We increment major version in this release due to decision to shift our developm
 
 - ORDER BY parsing has been added to the aggregate functions.
 
-[Unreleased]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.2.0...HEAD
+[Unreleased]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.3.0...HEAD
+[15.3.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.2.0...v15.3.0
 [15.2.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.1.0...v15.2.0
 [15.1.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v15.0.0...v15.1.0
 [15.0.0]: https://github.com/pgcodekeeper/pgcodekeeper-core/compare/v14.7.0...v15.0.0
