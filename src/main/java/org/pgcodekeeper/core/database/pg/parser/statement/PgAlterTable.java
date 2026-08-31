@@ -1071,9 +1071,9 @@ public final class PgAlterTable extends PgTableAbstract {
      * comparison reads the normalized half alone, and an empty normalized half is
      * what a column with no expression at all has.
      * <p>
-     * Unread, neither was merely dropped. A generated column has no in-place
-     * alter - {@code PgColumn.isGeneratedColumnChanged} recreates it on any
-     * change of the expression - so against a database carrying the old
+     * Unread, neither was merely dropped. Below PostgreSQL 17 a generated column
+     * has no in-place alter - {@code PgColumn.compareGenerationOption} recreates
+     * it on any change of the expression - so against a database carrying the old
      * expression the tool emitted {@code DROP COLUMN} followed by an
      * {@code ADD COLUMN} restating that same old expression, measured: it
      * destroyed the column and did not arrive where the file said.

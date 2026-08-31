@@ -7,11 +7,70 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [15.3.0-neo1] - 2026-08-31
+
 ### Added
+
+- Added reading of the SQL forms PostgreSQL prints for calls it deparses on its own: `AT LOCAL` (PostgreSQL 17), `IS [NOT] NORMALIZED` and `NORMALIZE()` (PostgreSQL 13) and `SYSTEM_USER` (PostgreSQL 16). A view, a default or a constraint written with the ordinary function call comes back out of the database in these forms, so until now the tool exported a project file it could not read back, and the statement dropped out of the model together with everything depending on it.
+- Added a comparison depth setting. A comparison that only needs the difference tree can skip the full analysis of both sides and finish considerably faster, while a comparison that builds a migration script still gets the complete model.
+- Added reuse of analyzed project models between runs. A project that has not changed since the previous comparison is restored from a persistent index instead of being parsed and analyzed again.
+- Added persistent caches for PostgreSQL routine bodies and system catalog rows, so a repeated comparison against the same database no longer re-reads what has not changed.
+- Added a filter file that decides which top-level project files take part in a load. It is applied before parsing, so the files it rejects cost nothing.
+- Added exact schema exclusions applied while a project is loaded, before its files are parsed. A statement that resolves to an excluded schema is dropped deliberately and is not reported as a project error.
+- Extended ignore rules to nested objects and to individual columns. A rule can now hide a column, a constraint, an index or a trigger without hiding the object that owns it.
+- Added the ability to name columns in an ignore rule so that those columns stay out of the comparison while the table itself keeps taking part in it.
+- Added a report of how many objects and columns the ignore rules kept out of a comparison.
+- Added progress reporting for the analysis stage of a project load, so a long load no longer looks stalled, and added separate load timings for the source and target sides.
+- Added an option to leave the cache setting of a sequence exactly as the database has it.
+- Added an option to write `ALTER TABLE` without `ONLY`, so that the change reaches the whole inheritance or partition tree.
+- Added an option to leave the statistics target of a column exactly as the database has it.
+- Added preservation of the values a project owns when a database state is applied over that project.
+- Added a warning when a migration would differ from the project only in the letter case of a column name, because applying such a migration loses the column's data.
+- Added marks in the difference tree for what a migration cannot carry over, such as a collation change or a value the comparison does not look at.
+- Added the source commit of a build to the bundle manifest, so two bundles carrying the same version can be told apart, and packaging now refuses a bundle whose manifest does not match the sources it was built from.
+- Extended the public API: a comparison can be loaded once and reused, its dependency graphs can be shared between runs, and the methods that build the difference tree and the migration script accept an already loaded comparison.
 
 ### Changed
 
+- Isolated persistent PostgreSQL routine-body and catalog-row caches by a full SHA-256 fingerprint of the target and session identity, with full SHA-256 reader/query identities inside each target.
+- Bounded serialized catalog-row cache payloads to 32 MiB and made cache pruning non-blocking across local JVM processes. Persistent caches require a local filesystem; NFS and other network filesystems are not supported.
+- Project loading and reading from PostgreSQL became substantially faster: catalog rows are read in parallel and in a packed form, routine bodies are fetched only when their contents actually differ, and the lookups that used to scan whole collections are now indexed.
+- A comparison needs less memory: the minimum working heap of the largest project measured drops from 3328 MB to 2560 MB and the peak live set from 2783 MB to 1700 MB, because three things held for the whole run that nothing reads are now released.
+- A batch run builds the difference tree and both dependency graphs once for the whole run instead of once per output, and a batch that comes out empty builds neither. Every generated script is byte-identical to what it was.
+- A partial export now saves only the paths it is about to touch instead of copying the entire project first, which makes exporting a handful of objects from a large project nearly instant.
+- `ON ONLY` is written only where an index actually attaches to partitions, instead of on every index of a partitioned table.
+- A storage parameter value is now written the way a database states it — quoted — whichever side stated it, so a project and a database that spell one parameter two ways describe one and the same object.
+- A migration that changes the query of a ClickHouse materialized view now carries the query exactly as the project writes it, instead of the shape the comparison uses internally.
+- Columns hidden by an ignore rule now stay out of the project files written when a database state is applied over a project, for MS SQL and ClickHouse as well as for PostgreSQL. A migration script is unaffected: a hidden column takes part in no comparison, so nothing is ever added, dropped or altered for it, and what the script does write it writes from the project, exactly as the project declares it.
+
 ### Fixed
+
+- Rejected malformed persistent PostgreSQL catalog-row cache entries with oversized nested arrays before allocation, preventing heap amplification.
+- Fixed PostgreSQL owned-sequence migrations: owning-table changes now run first, sequence ownership changes precede ACL reconciliation, renamed sequences use the target name, and surviving sequences are detached and reattached around owning column or table recreation without losing their OID or current value. Effective owners are validated for both attached and detached sequences, and filtered or incomplete scripts fail before emitting an invalid partial migration.
+- Four migrations the server refused to run are fixed: a foreign key whose backing unique index is dropped is now dropped and recreated with it; a foreign key is matched to the key it references by column set rather than by position, as the server matches it; a cycle between a view and a function is broken; and `ALTER TYPE ... ADD VALUE` is moved ahead of the transaction, because PostgreSQL refuses to use an enum value in the transaction that added it.
+- Hardened PostgreSQL full analysis for parser-recovered `SELECT` trees and corrected alias-less `ROWS FROM` analysis, including multi-function signatures, output aliases, and `WITH ORDINALITY`.
+- Parsed PostgreSQL `regtype` string literals with the data-type grammar, eliminating false warnings for multiword, array, and typmod types while retaining qualified custom-type dependencies.
+- An expression written differently but meaning the same thing is no longer reported as a change. Spacing, letter case and the spelling of a type no longer matter for index predicates and index column expressions, `CHECK` constraints on tables and on domains, `EXCLUDE` predicates, extended statistics expressions, trigger `WHEN` conditions, rule conditions, column and domain defaults, row policy `USING` and `WITH CHECK` clauses, and for ClickHouse engine clauses, dictionary options and policy filters.
+- An object holding a construct the tool could not read is no longer compared as if it held nothing at all: two objects whose unreadable constructs differ used to come out equal, and the difference between them never reached the migration.
+- Six kinds of difference no migration could ever settle are gone. An object showed as changed on every single run while the statement written for it changed nothing in the catalog — and for a primary key or a unique constraint that meant rebuilding its index every time, and for a view with an explicit column list dropping and recreating it, dependants and all. The six are the storage parameters, the access method of an index, the bound of a partition, `TO PUBLIC` in a policy, the storage mode of a column, and the column list of a view. Each pair of spellings is now read into the one the database keeps.
+- `ALTER` statements that the grammar already accepted now reach the model instead of being dropped: the column, constraint, identity, generated-column and table-property forms of `ALTER TABLE`, its `RENAME CONSTRAINT`, `SET DISTRIBUTED BY` and `RESET (...)` forms, the trigger and rule state forms, `ALTER DOMAIN` with a default, a `NOT NULL` or a constraint, the body of `ALTER SEQUENCE`, the alternatives of `ALTER TYPE`, and the property forms of `ALTER INDEX`, `ALTER VIEW` and `ALTER MATERIALIZED VIEW`. A project file using one of these no longer produced a migration that undid what the file itself stated.
+- Two more statements the grammar accepted now reach the model: `ALTER TABLE ... ATTACH/DETACH PARTITION` and the `LIKE` form of a column definition. A partition written the way a dump writes it — the table, then the `ATTACH` — used to load as a plain table with no bound and no parent, and the comparison then proposed detaching a live partition from two states that are identical; a table defined with `LIKE` reached the model with no columns at all, and the comparison wrote a `DROP COLUMN` for every one of them.
+- A constraint or an index the tool could not fully read is no longer regenerated as invalid SQL: a constraint with an empty column list and a primary key that adopts an existing index are now written correctly, and such a primary key is no longer lost from the model altogether.
+- A clause the tool could not read no longer turns into a wrong statement in the migration: a rule no longer becomes `DO NOTHING`, a `CHECK` constraint no longer becomes `CHECK (null)`, a trigger no longer loses its `WHEN` condition, an `EXCLUDE` constraint no longer loses its clause, a routine configuration value no longer becomes `null`, and a view whose query could not be read no longer aborts the load.
+- A column added together with a `NOT NULL` constraint marked `NOT VALID` no longer loses that constraint. It is the one shape of not-null that cannot be written inside a column definition, and it was written nowhere else either, so the migration left the database short of a constraint the project declares and only a second run — one that no longer had to add the column — put it back.
+- The data transfer a table recreation performs no longer breaks on a column whose name needs quoting: the insert, the sequence lookup and the restart block now quote and escape the name everywhere they name it.
+- `ALTER TABLE ... ENABLE/DISABLE TRIGGER` written for a partition now quotes the trigger name. Unquoted, a name with a capital letter named a trigger that does not exist and the statement failed outright, while a name that is also a keyword of the statement silently answered for every trigger of the table instead of the one it named.
+- A failed partial export leaves the project recoverable: the rollback keeps going past a path it cannot put back, keeps the saved copy and reports where it is instead of deleting it, restores symbolic links as links rather than as copies of their targets, and removes a root directory that the export itself created.
+- A failure while loading is reported instead of being turned into an empty or partial result that looks like a successful load.
+- An ignore list or a dependencies list that cannot be read now fails the operation instead of being treated as an empty one. An unreadable filter is not the same thing as no filter, and the difference decides which objects a comparison covers and what the generated script contains.
+- Fixed deferrability handling in PostgreSQL: `INITIALLY DEFERRED` now implies `DEFERRABLE`, a constraint trigger reads both words of its deferrability, and a foreign key adds its `ALTER CONSTRAINT` statement to the migration once rather than twice.
+- Fixed a foreign key comparison that overlooked flags its own identity already accounted for, so a changed foreign key stays in the migration script.
+- Fixed `ALTER SEQUENCE ... SET LOGGED` for a sequence declared by the schema, `OWNED BY NONE` now actually removes the owner, and a `SET DEFAULT` is written through the same path as an inline default.
+- Fixed a ClickHouse view copy that shared its columns with the original, and a change of a view's engine that left the view's identity stale.
+- A broken routine body is now reported against the file it came from instead of against an unrelated one.
+- Fixed a crash when a Greenplum-specific partitioning clause was applied to a table that is not partitioned that way.
+- Generating a script for a selection of objects no longer aborts when the selection names a place only one of the two databases has — a child of a table or of a schema the other side never had — and a selection holding two same-named objects in different schemas now scripts both of them.
+- Ignored objects no longer appear in the difference tree, and a column that the rest of the database still refers to is no longer hidden.
 
 ## [15.3.0] - 2026-08-10
 

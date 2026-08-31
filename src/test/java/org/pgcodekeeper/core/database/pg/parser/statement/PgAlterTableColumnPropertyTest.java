@@ -96,8 +96,8 @@ class PgAlterTableColumnPropertyTest {
     /**
      * The other direction, and the one the empty script cannot speak for on its
      * own: against a database carrying the old expression, the file must produce
-     * the change. A generated column has no in-place alter -
-     * {@code PgColumn.isGeneratedColumnChanged} recreates on any change of the
+     * the change. Below PostgreSQL 17 a generated column has no in-place alter -
+     * {@code PgColumn.compareGenerationOption} recreates on any change of the
      * expression - so the pair is what the change looks like.
      */
     @Test

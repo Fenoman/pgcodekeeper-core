@@ -7,7 +7,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.pgcodekeeper</groupId>
     <artifactId>pgcodekeeper-core</artifactId>
-    <version>15.3.0</version>
+    <version>15.3.0-neo1</version>
     <packaging>bundle</packaging>
 
     <name>pgcodekeeper-core</name>
@@ -181,6 +181,37 @@
                     <release>${java.version}</release>
                 </configuration>
             </plugin>
+            <!--
+                One version coordinate can be rebuilt any number of times, so the
+                version alone cannot tell a fresh bundle from a stale one. Resolve the
+                source commit here and stamp it into the bundle manifest below; the
+                packaging gate rejects any bundle whose commit is not the pinned one.
+                Without git metadata the build still succeeds, the header is simply
+                dropped, and the packaging gate then reports a missing commit.
+            -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.2</version>
+                <executions>
+                    <execution>
+                        <id>resolve-build-commit</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                    <offline>true</offline>
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git\.commit\.id$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
@@ -218,6 +249,9 @@
                 <extensions>true</extensions>
                 <configuration>
                     <instructions>
+                        <Bundle-Version>15.3.0.neo1</Bundle-Version>
+                        <Implementation-Version>${project.version}</Implementation-Version>
+                        <Implementation-Build>${git.commit.id}</Implementation-Build>
                         <Export-Package>
                             !org.pgcodekeeper.core.localizations.*,
                             org.pgcodekeeper.core.*
@@ -233,6 +267,28 @@
                         </Require-Bundle>
                     </instructions>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.3</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <project.groupId>${project.groupId}</project.groupId>
+                        <project.artifactId>${project.artifactId}</project.artifactId>
+                        <project.version>${project.version}</project.version>
+                        <project.build.directory>${project.build.directory}</project.build.directory>
+                        <project.build.finalName>${project.build.finalName}</project.build.finalName>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

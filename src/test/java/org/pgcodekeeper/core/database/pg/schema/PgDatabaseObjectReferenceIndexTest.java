@@ -44,7 +44,7 @@ class PgDatabaseObjectReferenceIndexTest {
 
         var library = new PgDatabase();
         library.addReference("library.sql", location);
-        disabled.addLib(library, null, null);
+        disabled.addLib(library, null, null, false);
 
         var copy = (PgDatabase) disabled.shallowCopy();
         copy.addReference("copy.sql", location);

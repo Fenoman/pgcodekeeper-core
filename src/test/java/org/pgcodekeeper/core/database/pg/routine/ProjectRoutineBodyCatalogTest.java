@@ -117,7 +117,7 @@ class ProjectRoutineBodyCatalogTest {
         libraryFunction.setBody(libraryCanonical);
         addCandidate(library, libraryFunction, "SELECT 'library'", libraryCanonical,
                 RoutineBodyRepresentation.SQL_TEXT);
-        db.addLib(library, "test-library", null);
+        db.addLib(library, "test-library", null, false);
 
         PgFunction finalForeign = routine(schema, new PgFunction("foreign"));
         finalForeign.setBody("$$SELECT 'final'$$");
@@ -157,7 +157,7 @@ class ProjectRoutineBodyCatalogTest {
         addCandidate(library, libraryFunction, libraryRaw, libraryCanonical,
                 RoutineBodyRepresentation.SQL_TEXT);
 
-        db.addLib(library, "same-value-library", null);
+        db.addLib(library, "same-value-library", null, false);
         ProjectRoutineBodyCatalog catalog = ProjectRoutineBodyCatalog.build(db);
 
         assertNotSame(projectCanonical, libraryCanonical);
@@ -182,7 +182,7 @@ class ProjectRoutineBodyCatalogTest {
         addCandidate(library, libraryFunction, "SELECT 'library only'", canonical,
                 RoutineBodyRepresentation.SQL_TEXT);
 
-        db.addLib(library, "test-library", null);
+        db.addLib(library, "test-library", null, false);
         PgAbstractFunction finalTwin = db.getSchema("Mixed Schema")
                 .getFunction(libraryFunction.getName());
 
@@ -312,7 +312,7 @@ class ProjectRoutineBodyCatalogTest {
         libraryOnly.setBody(libraryCanonical);
         addCandidate(library, libraryOnly, "SELECT 3", libraryCanonical,
                 RoutineBodyRepresentation.SQL_TEXT);
-        db.addLib(library, "test-library", null);
+        db.addLib(library, "test-library", null, false);
 
         assertEquals(1, ProjectRoutineBodyCatalog.countPotentialCandidates(
                 db.getAnalysisLaunchers()));

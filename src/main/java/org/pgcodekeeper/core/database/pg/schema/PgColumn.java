@@ -103,7 +103,7 @@ public class PgColumn extends PgAbstractStatement
      * normalized one when the parse succeeds.
      * <p>
      * The gates that decide what an <i>already required</i> {@code ALTER} writes
-     * read the raw half instead, deliberately: {@link #isGeneratedColumnChanged}
+     * read the raw half instead, deliberately: {@link #compareGenerationOption}
      * and the drop-first test, both in {@link #appendAlterSQL}, the
      * {@link #compareDefaults} call there, and {@link #isJoinable}. None of them
      * can be asked about a pair this field calls equal, and the reason is one
@@ -117,8 +117,9 @@ public class PgColumn extends PgAbstractStatement
      * re-spelling is paid for. Measured over the whole pipeline, the price is
      * not one statement: with a type change it is the redundant pair
      * {@code DROP DEFAULT} / {@code SET DEFAULT}, and for a generated column
-     * {@link #isGeneratedColumnChanged} demands the raw texts be equal, so any
-     * other difference alongside a re-spelled expression recreates the column -
+     * {@link #compareGenerationOption} demands the raw texts be equal below
+     * PostgreSQL 17 (there the expression is altered in place), so any other
+     * difference alongside a re-spelled expression recreates the column -
      * {@code DROP COLUMN} then {@code ADD COLUMN}, a full rewrite of a
      * {@code STORED} one. Left as it is deliberately: this is the behaviour
      * every such pair had before the normalized half existed, which strictly
@@ -1066,7 +1067,7 @@ public class PgColumn extends PgAbstractStatement
      * declared with the default collation of its type are the same thing to this
      * tool and it must not reset the one to reach the other. Reporting the
      * difference would name a change no script can carry out. A generated column
-     * is exempt: {@link #isGeneratedColumnChanged} recreates it on any collation
+     * is exempt: {@link #compareGenerationOption} recreates it on any collation
      * change, so there the difference is migratable.
      * <p>
      * The cache of an identity sequence is migratable and is overlooked only
